@@ -59,8 +59,7 @@ public sealed class HermesTuningAdvisor
             if (_memory is not null && content is not null)
             {
                 var missing = string.Join(", ", request.MissingIndexes.Select(m => $"{m.Schema}.{m.Table}({m.EqualityColumns})"));
-                var summary = request.Sql.Replace('
-', ' ').Trim();
+                var summary = request.Sql.Replace('\n', ' ').Trim();
                 _memory.AppendSession(DateTime.Now.ToString("yyyy-MM-dd HH:mm"), summary, missing, content);
             }
             return new(true, content ?? string.Empty, null);
