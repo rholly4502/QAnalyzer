@@ -170,6 +170,12 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnResultSelected(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        var d = ResultsGrid.SelectedItem as Diagnostic;
+        DetailText.Text = d is null ? string.Empty : DiagnosticDetailFormatter.Format(d);
+    }
+
     private void OnCopyMarkdownClick(object sender, RoutedEventArgs e)
     {
         if (_diagnostics.Count == 0)

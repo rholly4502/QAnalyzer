@@ -78,17 +78,34 @@
                  AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
                  VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" IsReadOnly="True"
                  Visibility="Collapsed"/>
-        <DataGrid x:Name="ResultsGrid" Grid.Row="4"
-                  AutoGenerateColumns="False" IsReadOnly="True"
-                  HeadersVisibility="Column" GridLinesVisibility="All"
-                  RowHeight="26" CanUserResizeRows="False" SelectionMode="Single">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
-                <DataGridTextColumn Header="Rule" Binding="{Binding RuleId}" Width="110"/>
-                <DataGridTextColumn Header="Baris" Binding="{Binding Line}" Width="50"/>
-                <DataGridTextColumn Header="Pesan" Binding="{Binding Message}" Width="380"/>
-                <DataGridTextColumn Header="Saran" Binding="{Binding Suggestion}" Width="*"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <Grid Grid.Row="4" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <DataGrid x:Name="ResultsGrid" Grid.Column="0"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      HeadersVisibility="Column" GridLinesVisibility="All"
+                      RowHeight="26" CanUserResizeRows="False" SelectionMode="Single"
+                      SelectionChanged="OnResultSelected">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
+                    <DataGridTextColumn Header="Rule" Binding="{Binding RuleId}" Width="110"/>
+                    <DataGridTextColumn Header="Baris" Binding="{Binding Line}" Width="50"/>
+                    <DataGridTextColumn Header="Pesan" Binding="{Binding Message}" Width="380"/>
+                    <DataGridTextColumn Header="Saran" Binding="{Binding Suggestion}" Width="*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+            <Border Grid.Column="1" Width="320" Margin="8,0,0,0" Padding="8"
+                    BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="4">
+                <StackPanel>
+                    <TextBlock Text="Detail" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBox x:Name="DetailText" IsReadOnly="True"
+                             FontFamily="Consolas" FontSize="12"
+                             VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                             Text="Pilih baris di daftar untuk melihat detail saran."/>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
