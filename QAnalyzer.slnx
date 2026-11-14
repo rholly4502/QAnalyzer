@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QAnalyzer.Core/QAnalyzer.Core.csproj" />
+    <Project Path="src/QAnalyzer.Wpf/QAnalyzer.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QAnalyzer.Core.Tests/QAnalyzer.Core.Tests.csproj" />
+  </Folder>
+</Solution>
