@@ -38,13 +38,13 @@
  {
   "id": "P1.3",
   "title": "Rule UpdateWithoutWhereRule + test",
-  "status": "pending",
+  "status": "done",
   "phase": "P1"
  },
  {
   "id": "P1.4",
   "title": "Report formatter MD/CSV + test",
-  "status": "pending",
+  "status": "done",
   "phase": "P1"
  },
  {
