@@ -20,17 +20,20 @@ public sealed class HermesTuningAdvisor
     private readonly HttpClient _http;
     private readonly string _endpoint;
     private readonly string _apiKey;
+    private readonly TuningMemory? _memory;
 
-    public HermesTuningAdvisor(HttpClient http, string endpoint, string apiKey)
+    public HermesTuningAdvisor(HttpClient http, string endpoint, string apiKey, TuningMemory? memory = null)
     {
         _http = http;
         _endpoint = endpoint.TrimEnd('/') + "/chat/completions";
         _apiKey = apiKey;
+        _memory = memory;
     }
 
     public async Task<TuningResponse> AskAsync(TuningRequest request, CancellationToken ct = default)
     {
         var prompt = BuildPrompt(request);
+        if (_memory is not null) prompt += _memory.BuildContext();
         var body = new
         {
             model = "hermes-agent",
@@ -53,6 +56,13 @@ public sealed class HermesTuningAdvisor
                 return new(false, string.Empty, $"HTTP {(int)resp.StatusCode}: {Truncate(text, 300)}");
             using var doc = JsonDocument.Parse(text);
             var content = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+            if (_memory is not null && content is not null)
+            {
+                var missing = string.Join(", ", request.MissingIndexes.Select(m => $"{m.Schema}.{m.Table}({m.EqualityColumns})"));
+                var summary = request.Sql.Replace('
+', ' ').Trim();
+                _memory.AppendSession(DateTime.Now.ToString("yyyy-MM-dd HH:mm"), summary, missing, content);
+            }
             return new(true, content ?? string.Empty, null);
         }
         catch (Exception ex)
