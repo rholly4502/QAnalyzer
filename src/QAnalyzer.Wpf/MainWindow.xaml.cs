@@ -73,6 +73,8 @@ public partial class MainWindow : Window
     private void OnAnalyzeClick(object sender, RoutedEventArgs e)
     {
         _diagnostics.Clear();
+        ResultsGrid.Visibility = Visibility.Visible;
+        TuningOutput.Visibility = Visibility.Collapsed;
         var sql = ScriptEditor.Text;
         if (string.IsNullOrWhiteSpace(sql))
         {
@@ -94,9 +96,6 @@ public partial class MainWindow : Window
                      $"Info: {report.Diagnostics.Count(d => d.Level == RiskLevel.Info)}";
         StatusText.Text = $"{report.Total} diagnostic — {counts}" +
                           (MaxDopCheck.IsChecked == true ? " (MAXDOP 1 diterapkan)" : string.Empty);
-
-        if (MaxDopCheck.IsChecked == true && !ReferenceEquals(analyzed, sql))
-            StatusText.Text += $" | {counts}";
     }
 
     private void OnFilterChanged(object sender, RoutedEventArgs e)
