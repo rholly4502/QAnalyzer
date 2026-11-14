@@ -1,13 +1,7 @@
-﻿using System.Text;
+using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using QAnalyzer.Core;
 
 namespace QAnalyzer.Wpf;
 
@@ -16,8 +10,21 @@ namespace QAnalyzer.Wpf;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private readonly ObservableCollection<Diagnostic> _diagnostics = [];
+    private readonly SqlAnalyzer _analyzer = new(Array.Empty<ISqlRule>());
+
     public MainWindow()
     {
         InitializeComponent();
+        ResultsGrid.ItemsSource = _diagnostics;
+    }
+
+    private void OnAnalyzeClick(object sender, RoutedEventArgs e)
+    {
+        _diagnostics.Clear();
+        var report = _analyzer.Analyze(ScriptEditor.Text);
+        foreach (var d in report.Diagnostics)
+            _diagnostics.Add(d);
+        StatusText.Text = $"{report.Total} diagnostic";
     }
 }
