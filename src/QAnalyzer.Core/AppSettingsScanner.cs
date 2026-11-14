@@ -40,6 +40,10 @@ public sealed class AppSettingsScanner
             var settings = new AnalyzerSettings();
             if (root.TryGetProperty("Analyzer", out var an))
             {
+                if (an.TryGetProperty("TuningEndpoint", out var ep) && ep.ValueKind == JsonValueKind.String)
+                    settings = settings with { TuningEndpoint = ep.GetString() ?? string.Empty };
+                if (an.TryGetProperty("TuningApiKey", out var key) && key.ValueKind == JsonValueKind.String)
+                    settings = settings with { TuningApiKey = key.GetString() ?? string.Empty };
                 if (an.TryGetProperty("EnableMaxDopTransform", out var mx) && mx.ValueKind == JsonValueKind.True)
                     settings = settings with { EnableMaxDopTransform = true };
                 if (an.TryGetProperty("Profile", out var pf) &&

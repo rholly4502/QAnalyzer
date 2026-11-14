@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Net.Http;
 using System.Text;
 using System.Windows;
 using Microsoft.Win32;
@@ -19,8 +20,10 @@ public partial class MainWindow : Window
 
     private readonly ObservableCollection<Diagnostic> _diagnostics = [];
     private readonly AppSettingsScanner _scanner = new();
+    private readonly HttpClient _http = new();
     private SqlAnalyzer _analyzer = new(DefaultRules);
     private AnalyzerSettings _settings = new();
+    private ISqlMetadataReader? _metadataReader;
 
     public MainWindow()
     {
@@ -29,11 +32,14 @@ public partial class MainWindow : Window
         // Auto-scan appsettings.json di folder yang sama dengan exe, jika ada.
         var dir = Path.GetDirectoryName(AppContext.BaseDirectory);
         var scanned = _scanner.ScanForDirectory(dir ?? string.Empty);
-        if (scanned is not null && scanned.Settings.Profile == AnalysisProfile.Reporting)
+        if (scanned is not null)
         {
-            ProfileCombo.SelectedIndex = 1;
             _settings = scanned.Settings;
-            StatusText.Text = "appsettings.json terbaca (Reporting).";
+            if (scanned.Settings.Profile == AnalysisProfile.Reporting)
+                ProfileCombo.SelectedIndex = 1;
+            if (!string.IsNullOrWhiteSpace(scanned.ConnectionString))
+                _metadataReader = new SqlDmvReader(scanned.ConnectionString);
+            StatusText.Text = "appsettings.json terbaca.";
         }
     }
 
@@ -86,6 +92,51 @@ public partial class MainWindow : Window
 
         if (MaxDopCheck.IsChecked == true && !ReferenceEquals(analyzed, sql))
             StatusText.Text += $" | {counts}";
+    }
+
+    private async void OnTuningClick(object sender, RoutedEventArgs e)
+    {
+        var sql = ScriptEditor.Text;
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            TuningStatus.Text = "Tempel query dulu.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_settings.TuningEndpoint) || string.IsNullOrWhiteSpace(_settings.TuningApiKey))
+        {
+            TuningStatus.Text = "Tuning belum dikonfigurasi — isi TuningEndpoint/TuningApiKey di appsettings.json.";
+            return;
+        }
+
+        TuningStatus.Text = "Menghubungi gateway…";
+        try
+        {
+            var report = _analyzer.Analyze(sql);
+            if (_metadataReader is SqlDmvReader live && !live.IsConnected) live.Open();
+            var missing = _metadataReader is not null ? _metadataReader.GetMissingIndexes() : [];
+            CachedQueryStat? cached = null;
+            if (_metadataReader is not null)
+                cached = _metadataReader.GetStatsForSql(sql);
+
+            var advisor = new HermesTuningAdvisor(_http, _settings.TuningEndpoint, _settings.TuningApiKey);
+            var resp = await advisor.AskAsync(new TuningRequest(sql, report.Diagnostics, missing, cached));
+
+            if (resp.Success)
+            {
+                TuningOutput.Text = resp.Content;
+                TuningOutput.Visibility = Visibility.Visible;
+                ResultsGrid.Visibility = Visibility.Collapsed;
+                TuningStatus.Text = "Saran tuning diterima.";
+            }
+            else
+            {
+                TuningStatus.Text = $"Gagal: {resp.Error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            TuningStatus.Text = $"Error: {ex.Message}";
+        }
     }
 
     private void OnCopyMarkdownClick(object sender, RoutedEventArgs e)

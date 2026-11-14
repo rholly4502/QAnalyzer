@@ -11,6 +11,12 @@ public sealed record AnalyzerSettings
     /// <summary>Aktifkan transform "hemat resource" (OPTION MAXDOP 1).</summary>
     public bool EnableMaxDopTransform { get; init; } = false;
 
+    /// <summary>Endpoint gateway Hermes (OpenAI-compatible), mis. http://host:5000/v1.</summary>
+    public string TuningEndpoint { get; init; } = string.Empty;
+
+    /// <summary>API key gateway (untuk tombol Tuning). Jangan di-commit.</summary>
+    public string TuningApiKey { get; init; } = string.Empty;
+
     /// <summary>Mode konteks: "general" | "reporting" (mengecilkan NOLOCK/SELECT * ke Info).</summary>
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public AnalysisProfile Profile { get; init; } = AnalysisProfile.General;

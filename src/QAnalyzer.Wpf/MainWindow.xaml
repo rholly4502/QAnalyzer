@@ -37,9 +37,15 @@
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,8">
             <Button Content="Analisis" Width="110" Height="30" Click="OnAnalyzeClick" FontWeight="SemiBold"/>
             <Button Content="Salin Laporan MD" Width="130" Height="30" Margin="8,0,0,0" Click="OnCopyMarkdownClick"/>
+            <Button Content="Tuning" Width="90" Height="30" Margin="8,0,0,0" Click="OnTuningClick" FontWeight="SemiBold"/>
+            <TextBlock x:Name="TuningStatus" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="DimGray"/>
             <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="Gray"/>
         </StackPanel>
 
+        <TextBox x:Name="TuningOutput" Grid.Row="3" Margin="0,8,0,0"
+                 AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
+                 VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" IsReadOnly="True"
+                 Visibility="Collapsed"/>
         <DataGrid x:Name="ResultsGrid" Grid.Row="3"
                   AutoGenerateColumns="False" IsReadOnly="True"
                   HeadersVisibility="Column" GridLinesVisibility="All"
