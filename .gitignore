@@ -9,3 +9,4 @@ laporan/
 # kredensial lokal — jangan pernah commit
 appsettings.json
 appsettings.Development.json
+tuning/
