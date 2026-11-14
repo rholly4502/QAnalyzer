@@ -66,5 +66,80 @@ WHERE ius.database_id = DB_ID()";
         return list;
     }
 
+
+    /// <summary>
+    /// Mencari statistik historis untuk query yang cocok (parameterized/plan cache)
+    /// tanpa mengeksekusi. Cocokkan via hashing teks biasa + cari di plan cache.
+    /// </summary>
+    public CachedQueryStat? GetStatsForSql(string sqlText)
+    {
+        // parameterisasi sederhana: hapus literal string/angka supaya bisa cocok
+        // dgn plan yang sudah di-parameterize oleh server.
+        var normalized = System.Text.RegularExpressions.Regex.Replace(
+            sqlText, @"'[^']*'|\b\d+\b", "?") .Trim();
+        const string sql = @"
+SELECT TOP 1
+    SUBSTRING(st.text, (qs.statement_start_offset/2)+1,
+        ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text)
+          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2)+1) AS sql_text,
+    qs.execution_count,
+    qs.total_elapsed_time/1000,
+    qs.total_worker_time/1000,
+    qs.total_logical_reads,
+    DATEDIFF(MINUTE, cp.creation_time, GETDATE())
+FROM sys.dm_exec_query_stats qs
+JOIN sys.dm_exec_cached_plans cp ON cp.plan_handle = qs.plan_handle
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+WHERE st.text LIKE @pattern
+ORDER BY qs.total_elapsed_time DESC;
+";
+        using var cmd = new SqlCommand(sql, _conn);
+        cmd.Parameters.AddWithValue("@pattern", "%" + normalized.Substring(0, Math.Min(300, normalized.Length)) + "%");
+        using var r = cmd.ExecuteReader();
+        if (!r.Read()) return null;
+        return new CachedQueryStat(
+            r.GetString(0), r.GetInt64(1), r.GetInt64(2),
+            r.GetInt64(3), r.GetInt64(4), r.GetInt32(5));
+    }
+
+
+    /// <summary>
+    /// Missing index dari sys.dm_db_missing_index_details, diagregasi per tabel.
+    /// Ini menangkap kasus "query tidak pakai index karena index-nya belum ada".
+    /// </summary>
+    public IReadOnlyList<MissingIndex> GetMissingIndexes(string? dbName = null)
+    {
+        var sql = @"
+SELECT
+    DB_NAME(d.database_id) AS [db],
+    OBJECT_SCHEMA_NAME(d.object_id, d.database_id) AS [schema],
+    OBJECT_NAME(d.object_id, d.database_id) AS [table],
+    MAX(d.equality_columns),
+    MAX(d.inequality_columns),
+    MAX(d.included_columns),
+    SUM(gs.user_seeks),
+    SUM(gs.user_scans),
+    MAX(CAST(gs.avg_user_impact AS bigint))
+FROM sys.dm_db_missing_index_details d
+JOIN sys.dm_db_missing_index_groups g ON g.index_handle = d.index_handle
+JOIN sys.dm_db_missing_index_group_stats gs ON gs.group_handle = g.index_group_handle
+WHERE d.database_id = DB_ID(@db)
+GROUP BY d.database_id, d.object_id
+ORDER BY SUM(gs.user_seeks) + SUM(gs.user_scans) DESC;
+";
+        var list = new List<MissingIndex>();
+        using var cmd = new SqlCommand(sql, _conn);
+        cmd.Parameters.AddWithValue("@db", (object)(dbName ?? ""));
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new MissingIndex(
+                r.GetString(0), r.GetString(1), r.GetString(2),
+                r.IsDBNull(3) ? null : r.GetString(3),
+                r.IsDBNull(4) ? null : r.GetString(4),
+                r.IsDBNull(5) ? null : r.GetString(5),
+                r.GetInt64(6), r.GetInt64(7), r.GetInt64(8)));
+        return list;
+    }
+
     public void Dispose() => _conn.Dispose();
 }

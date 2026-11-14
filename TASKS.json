@@ -100,5 +100,11 @@
   "title": "Web demo memakai Core yang sama (nanti)",
   "status": "pending",
   "phase": "P3"
+ },
+ {
+  "id": "P2.5",
+  "title": "Cek di Server: lookup statistik historis via DMV (tanpa eksekusi)",
+  "status": "pending",
+  "phase": "P2"
  }
 ]

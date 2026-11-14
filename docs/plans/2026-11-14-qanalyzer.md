@@ -36,6 +36,10 @@ docs/plans/2026-11-14-qanalyzer.md
 TASKS.json                 # manifest progress (dibaca cron)
 ```
 
+## Fase analisis (2 fase — keputusan desain)
+- **Fase 1 — Static scan**: tanpa connection string. Jalankan semua rule dari teks; Critical langsung diberi peringatan menonjol.
+- **Fase 2 — "Cek di Server" (opsional, butuh connection string)**: HANYA baca plan cache/DMV — tidak mengeksekusi query. Cari query yang sama/mirip di `sys.dm_exec_query_stats` + `sys.dm_exec_cached_plans` + `sys.dm_exec_sql_text`, tampilkan statistik historisnya (`total_elapsed_time`, `total_worker_time`, `total_logical_reads`, `execution_count`). Tidak ada UPDATE/DELETE/INSERT; murni baca.
+
 ## Aturan risiko (severity — keputusan desain, REVISI)
 Lok: severity ditentukan **konteks**, bukan "ditemukan → warning". Setiap rule punya default + bisa di-override lewat policy/kel.
 
