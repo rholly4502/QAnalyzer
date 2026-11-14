@@ -5,3 +5,7 @@ obj/
 .vscode/
 laporan/
 *.sqlite
+
+# kredensial lokal — jangan pernah commit
+appsettings.json
+appsettings.Development.json
