@@ -11,6 +11,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="3*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="4*"/>
         </Grid.RowDefinitions>
 
@@ -42,11 +43,42 @@
             <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="Gray"/>
         </StackPanel>
 
-        <TextBox x:Name="TuningOutput" Grid.Row="3" Margin="0,8,0,0"
+        <!-- dashboard + filter -->
+        <Grid Grid.Row="3" Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <TextBlock Text="Filter:" VerticalAlignment="Center"/>
+                <CheckBox x:Name="FilterCritical" Content="Critical" IsChecked="True" Margin="8,0,0,0"
+                          VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#C0392B"
+                          Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
+                <CheckBox x:Name="FilterWarning" Content="Warning" IsChecked="True" Margin="8,0,0,0"
+                          VerticalAlignment="Center" Foreground="#B9770E"
+                          Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
+                <CheckBox x:Name="FilterInfo" Content="Info" IsChecked="True" Margin="8,0,0,0"
+                          VerticalAlignment="Center" Foreground="#2471A3"
+                          Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Border Background="#FDE7E9" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
+                    <TextBlock x:Name="DashCritical" FontWeight="SemiBold" Foreground="#C0392B"/>
+                </Border>
+                <Border Background="#FFF3DC" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
+                    <TextBlock x:Name="DashWarning" FontWeight="SemiBold" Foreground="#B9770E"/>
+                </Border>
+                <Border Background="#EAF4FE" CornerRadius="4" Padding="10,3">
+                    <TextBlock x:Name="DashInfo" FontWeight="SemiBold" Foreground="#2471A3"/>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <TextBox x:Name="TuningOutput" Grid.Row="4" Margin="0,8,0,0"
                  AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
                  VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" IsReadOnly="True"
                  Visibility="Collapsed"/>
-        <DataGrid x:Name="ResultsGrid" Grid.Row="3"
+        <DataGrid x:Name="ResultsGrid" Grid.Row="4"
                   AutoGenerateColumns="False" IsReadOnly="True"
                   HeadersVisibility="Column" GridLinesVisibility="All"
                   RowHeight="26" CanUserResizeRows="False" SelectionMode="Single">

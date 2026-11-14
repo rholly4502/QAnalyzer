@@ -19,6 +19,8 @@ public partial class MainWindow : Window
     ];
 
     private readonly ObservableCollection<Diagnostic> _diagnostics = [];
+    private readonly List<Diagnostic> _allDiagnostics = [];
+    private LevelFilter _filter = new();
     private readonly AppSettingsScanner _scanner = new();
     private readonly HttpClient _http = new();
     private SqlAnalyzer _analyzer = new(DefaultRules);
@@ -41,6 +43,8 @@ public partial class MainWindow : Window
                 _metadataReader = new SqlDmvReader(scanned.ConnectionString);
             StatusText.Text = "appsettings.json terbaca.";
         }
+
+        UpdateDashboard();
     }
 
     private void OnProfileChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -81,8 +85,9 @@ public partial class MainWindow : Window
             analyzed = MaxDopTransformer.AddMaxDopOne(sql);
 
         var report = _analyzer.Analyze(analyzed);
-        foreach (var d in report.Diagnostics.OrderByDescending(x => x.Level).ThenBy(x => x.Line))
-            _diagnostics.Add(d);
+        _allDiagnostics.Clear();
+        _allDiagnostics.AddRange(report.Diagnostics.OrderByDescending(x => x.Level).ThenBy(x => x.Line));
+        RefreshResults();
 
         var counts = $"Critical: {report.Diagnostics.Count(d => d.Level == RiskLevel.Critical)}, " +
                      $"Warning: {report.Diagnostics.Count(d => d.Level == RiskLevel.Warning)}, " +
@@ -92,6 +97,33 @@ public partial class MainWindow : Window
 
         if (MaxDopCheck.IsChecked == true && !ReferenceEquals(analyzed, sql))
             StatusText.Text += $" | {counts}";
+    }
+
+    private void OnFilterChanged(object sender, RoutedEventArgs e)
+    {
+        _filter = new LevelFilter
+        {
+            Critical = FilterCritical.IsChecked == true,
+            Warning = FilterWarning.IsChecked == true,
+            Info = FilterInfo.IsChecked == true,
+        };
+        RefreshResults();
+    }
+
+    private void RefreshResults()
+    {
+        _diagnostics.Clear();
+        foreach (var d in DiagnosticFilter.Apply(_allDiagnostics, _filter))
+            _diagnostics.Add(d);
+        UpdateDashboard();
+    }
+
+    private void UpdateDashboard()
+    {
+        var c = DiagnosticFilter.CountByLevel(_allDiagnostics);
+        DashCritical.Text = $"Critical: {c.Critical}";
+        DashWarning.Text = $"Warning: {c.Warning}";
+        DashInfo.Text = $"Info: {c.Info}";
     }
 
     private async void OnTuningClick(object sender, RoutedEventArgs e)
