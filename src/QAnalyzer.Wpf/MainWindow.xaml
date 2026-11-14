@@ -38,6 +38,8 @@
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,8">
             <Button Content="Analisis" Width="110" Height="30" Click="OnAnalyzeClick" FontWeight="SemiBold"/>
             <Button Content="Salin Laporan MD" Width="130" Height="30" Margin="8,0,0,0" Click="OnCopyMarkdownClick"/>
+            <Button Content="Export MD…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportMarkdownClick"/>
+            <Button Content="Export CSV…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportCsvClick"/>
             <Button Content="Tuning" Width="90" Height="30" Margin="8,0,0,0" Click="OnTuningClick" FontWeight="SemiBold"/>
             <TextBlock x:Name="TuningStatus" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="DimGray"/>
             <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="Gray"/>

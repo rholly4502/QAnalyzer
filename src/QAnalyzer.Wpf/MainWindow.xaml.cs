@@ -195,4 +195,32 @@ public partial class MainWindow : Window
         Clipboard.SetText(sb.ToString());
         StatusText.Text = "Laporan Markdown disalin ke clipboard.";
     }
+
+    private void OnExportMarkdownClick(object sender, RoutedEventArgs e)
+        => ExportReport("Markdown file (*.md)|*.md|All files (*.*)|*.*", ".md", ReportFormatter.ToMarkdown);
+
+    private void OnExportCsvClick(object sender, RoutedEventArgs e)
+        => ExportReport("CSV file (*.csv)|*.csv|All files (*.*)|*.*", ".csv", ReportFormatter.ToCsv);
+
+    private void ExportReport(string filter, string ext, Func<IEnumerable<Diagnostic>, string> formatter)
+    {
+        if (_allDiagnostics.Count == 0)
+        {
+            StatusText.Text = "Tidak ada diagnostic untuk diekspor.";
+            return;
+        }
+        var dlg = new SaveFileDialog { Filter = filter, DefaultExt = ext, FileName = $"qanalyzer-report{ext}" };
+        if (dlg.ShowDialog(this) == true)
+        {
+            try
+            {
+                File.WriteAllText(dlg.FileName, formatter(_allDiagnostics));
+                StatusText.Text = $"Laporan disimpan: {dlg.FileName}";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Gagal menyimpan: {ex.Message}";
+            }
+        }
+    }
 }

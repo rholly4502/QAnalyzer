@@ -1,116 +1,116 @@
 [
- {
-  "id": "P0.1",
-  "title": "Scaffold solusi (Core/Wpf/Tests) + build hijau",
-  "status": "done",
-  "phase": "P0"
- },
- {
-  "id": "P0.2",
-  "title": "Tulis rencana + TASKS.json",
-  "status": "done",
-  "phase": "P0"
- },
- {
-  "id": "P0.3",
-  "title": "Rangka WPF: MainWindow + tampilan input/report",
-  "status": "done",
-  "phase": "P0"
- },
- {
-  "id": "P0.4",
-  "title": "Commit awal + push repo publik",
-  "status": "done",
-  "phase": "P0"
- },
- {
-  "id": "P1.1",
-  "title": "Rule SelectStarRule + test",
-  "status": "done",
-  "phase": "P1"
- },
- {
-  "id": "P1.2",
-  "title": "Rule NoLockRule + test",
-  "status": "done",
-  "phase": "P1"
- },
- {
-  "id": "P1.3",
-  "title": "Rule UpdateWithoutWhereRule + test",
-  "status": "done",
-  "phase": "P1"
- },
- {
-  "id": "P1.4",
-  "title": "Report formatter MD/CSV + test",
-  "status": "done",
-  "phase": "P1"
- },
- {
-  "id": "P1.5",
-  "title": "Level dashboard di WPF (hasil + filter)",
-  "status": "done",
-  "phase": "P1"
- },
- {
-  "id": "P2.1",
-  "title": "Buka file .sql via dialog",
-  "status": "done",
-  "phase": "P2"
- },
- {
-  "id": "P2.2",
-  "title": "Editor teks script + tombol Analisis",
-  "status": "done",
-  "phase": "P2"
- },
- {
-  "id": "P2.3",
-  "title": "List diagnostic + detail (saran)",
-  "status": "done",
-  "phase": "P2"
- },
- {
-  "id": "P2.4",
-  "title": "Export laporan MD/CSV",
-  "status": "pending",
-  "phase": "P2"
- },
- {
-  "id": "P3.1",
-  "title": "Validasi input & error handling",
-  "status": "pending",
-  "phase": "P3"
- },
- {
-  "id": "P3.2",
-  "title": "README + dokumentasi",
-  "status": "pending",
-  "phase": "P3"
- },
- {
-  "id": "P3.3",
-  "title": "e2e manual + polish dark/light",
-  "status": "pending",
-  "phase": "P3"
- },
- {
-  "id": "P3.4",
-  "title": "Web demo memakai Core yang sama (nanti)",
-  "status": "pending",
-  "phase": "P3"
- },
- {
-  "id": "P2.5",
-  "title": "Cek di Server: lookup statistik historis via DMV (tanpa eksekusi)",
-  "status": "done",
-  "phase": "P2"
- },
- {
-  "id": "P2.6",
-  "title": "Tombol Tuning: kirim query+DMV ke gateway Hermes, tampilkan saran",
-  "status": "done",
-  "phase": "P2"
- }
+    {
+        "id": "P0.1",
+        "title": "Scaffold solusi (Core/Wpf/Tests) + build hijau",
+        "status": "done",
+        "phase": "P0"
+    },
+    {
+        "id": "P0.2",
+        "title": "Tulis rencana + TASKS.json",
+        "status": "done",
+        "phase": "P0"
+    },
+    {
+        "id": "P0.3",
+        "title": "Rangka WPF: MainWindow + tampilan input/report",
+        "status": "done",
+        "phase": "P0"
+    },
+    {
+        "id": "P0.4",
+        "title": "Commit awal + push repo publik",
+        "status": "done",
+        "phase": "P0"
+    },
+    {
+        "id": "P1.1",
+        "title": "Rule SelectStarRule + test",
+        "status": "done",
+        "phase": "P1"
+    },
+    {
+        "id": "P1.2",
+        "title": "Rule NoLockRule + test",
+        "status": "done",
+        "phase": "P1"
+    },
+    {
+        "id": "P1.3",
+        "title": "Rule UpdateWithoutWhereRule + test",
+        "status": "done",
+        "phase": "P1"
+    },
+    {
+        "id": "P1.4",
+        "title": "Report formatter MD/CSV + test",
+        "status": "done",
+        "phase": "P1"
+    },
+    {
+        "id": "P1.5",
+        "title": "Level dashboard di WPF (hasil + filter)",
+        "status": "done",
+        "phase": "P1"
+    },
+    {
+        "id": "P2.1",
+        "title": "Buka file .sql via dialog",
+        "status": "done",
+        "phase": "P2"
+    },
+    {
+        "id": "P2.2",
+        "title": "Editor teks script + tombol Analisis",
+        "status": "done",
+        "phase": "P2"
+    },
+    {
+        "id": "P2.3",
+        "title": "List diagnostic + detail (saran)",
+        "status": "done",
+        "phase": "P2"
+    },
+    {
+        "id": "P2.4",
+        "title": "Export laporan MD/CSV",
+        "status": "done",
+        "phase": "P2"
+    },
+    {
+        "id": "P3.1",
+        "title": "Validasi input & error handling",
+        "status": "pending",
+        "phase": "P3"
+    },
+    {
+        "id": "P3.2",
+        "title": "README + dokumentasi",
+        "status": "pending",
+        "phase": "P3"
+    },
+    {
+        "id": "P3.3",
+        "title": "e2e manual + polish dark/light",
+        "status": "pending",
+        "phase": "P3"
+    },
+    {
+        "id": "P3.4",
+        "title": "Web demo memakai Core yang sama (nanti)",
+        "status": "pending",
+        "phase": "P3"
+    },
+    {
+        "id": "P2.5",
+        "title": "Cek di Server: lookup statistik historis via DMV (tanpa eksekusi)",
+        "status": "done",
+        "phase": "P2"
+    },
+    {
+        "id": "P2.6",
+        "title": "Tombol Tuning: kirim query+DMV ke gateway Hermes, tampilkan saran",
+        "status": "done",
+        "phase": "P2"
+    }
 ]
