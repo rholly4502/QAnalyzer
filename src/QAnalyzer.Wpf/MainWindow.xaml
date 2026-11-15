@@ -15,6 +15,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="4*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- toolbar -->
@@ -141,6 +142,13 @@
                              Foreground="{DynamicResource EditableForegroundBrush}"/>
                 </StackPanel>
             </Border>
+        <TextBlock Grid.Row="5" Margin="0,8,0,0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                   FontSize="11" Foreground="{DynamicResource MutedForegroundBrush}">
+            <Run Text="ρ " FontFamily="Georgia" FontStyle="Italic" FontSize="14"
+                 Foreground="{DynamicResource SecondaryMutedForegroundBrush}"/>
+            <Run Text="RHO" FontWeight="SemiBold" FontSize="10" Foreground="{DynamicResource SecondaryMutedForegroundBrush}"/>
+            <Run Text=" · Rholly Kurnia Putra"/>
+        </TextBlock>
         </Grid>
     </Grid>
 </Window>
