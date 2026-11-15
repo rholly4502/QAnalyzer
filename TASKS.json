@@ -98,8 +98,9 @@
   {
     "id": "P3.4",
     "title": "Web demo memakai Core yang sama (nanti)",
-    "status": "pending",
-    "phase": "P3"
+    "status": "done",
+    "phase": "P3",
+    "note": "Web API (analyze/health) + frontend React/Vite base-aware /analyzer/; 4 test baru"
   },
   {
     "id": "P2.5",

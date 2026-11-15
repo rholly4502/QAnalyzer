@@ -90,3 +90,21 @@ Catatan:
 ## Lisensi
 
 Proyek pribadi (repo publik).
+
+## Web Demo (P3.4)
+
+Bukti Core murni dipakai ulang di web. `src/QAnalyzer.Web/` = API minimal
+(analize/health) yang memuat `QAnalyzer.Core`; `web/` = frontend React/Vite
+**base-aware** (`base=/analyzer/`) per arsitektur deploy rhol-ai.tech (subpath
+per app).
+
+Jalankan lokal:
+```bash
+# 1) backend
+dotnet run --project src/QAnalyzer.Web --urls http://localhost:5213
+# 2) frontend dev (Vite proxy /analyzer/api -> :5213)
+cd web && npm install && npm run dev
+```
+
+Produksi: `npm run build` (di `web/`) menulis hasil ke
+`src/QAnalyzer.Web/wwwroot/` yang disajikan backend di `/analyzer/`.
