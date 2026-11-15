@@ -2,8 +2,10 @@
   <Folder Name="/src/">
     <Project Path="src/QAnalyzer.Core/QAnalyzer.Core.csproj" />
     <Project Path="src/QAnalyzer.Wpf/QAnalyzer.Wpf.csproj" />
+    <Project Path="src/QAnalyzer.Web/QAnalyzer.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/QAnalyzer.Core.Tests/QAnalyzer.Core.Tests.csproj" />
+    <Project Path="tests/QAnalyzer.Web.Tests/QAnalyzer.Web.Tests.csproj" />
   </Folder>
 </Solution>
