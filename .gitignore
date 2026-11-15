@@ -10,3 +10,7 @@ laporan/
 appsettings.json
 appsettings.Development.json
 tuning/
+
+# frontend
+node_modules/
+web/dist/

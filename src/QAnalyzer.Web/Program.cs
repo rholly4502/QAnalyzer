@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.StaticFiles;
 using QAnalyzer.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,7 +23,7 @@ app.MapPost("/api/analyze", (AnalyzeRequest req, AnalyzerService svc) =>
 if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
 {
     app.UseDefaultFiles();
-    app.UseStaticFiles();
+    app.UseStaticFiles(new StaticFileOptions { RequestPath = "/analyzer" });
     app.MapFallbackToFile("index.html");
 }
 
