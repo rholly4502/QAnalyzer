@@ -31,4 +31,12 @@ public sealed class SqlAnalyzerTests
         public IEnumerable<Diagnostic> Evaluate(string sql) =>
             [ new Diagnostic(Level, Id, Title, "tandai semua") ];
     }
+
+    [Fact]
+    public void Analyze_NullSql_ThrowsArgumentNullException()
+    {
+        var analyzer = new SqlAnalyzer([]);
+        var ex = Assert.Throws<ArgumentNullException>(() => analyzer.Analyze(null!));
+        Assert.Equal("sql", ex.ParamName);
+    }
 }

@@ -17,6 +17,7 @@ public sealed class SqlAnalyzer
 
     public AnalysisReport Analyze(string sql)
     {
+        ArgumentNullException.ThrowIfNull(sql);
         var report = new AnalysisReport { Sql = sql };
         foreach (var rule in _rules)
         {

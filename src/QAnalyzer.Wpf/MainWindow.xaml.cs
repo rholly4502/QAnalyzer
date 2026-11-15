@@ -59,7 +59,15 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog { Filter = "SQL files (*.sql)|*.sql|All files (*.*)|*.*" };
         if (dlg.ShowDialog(this) == true)
         {
-            ScriptEditor.Text = File.ReadAllText(dlg.FileName);
+            try
+            {
+                ScriptEditor.Text = File.ReadAllText(dlg.FileName);
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Gagal membaca file: {ex.Message}";
+                return;
+            }
             var scanned = _scanner.ScanForDirectory(Path.GetDirectoryName(dlg.FileName) ?? string.Empty);
             if (scanned is not null)
             {
@@ -82,20 +90,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        var analyzed = sql;
-        if (MaxDopCheck.IsChecked == true)
-            analyzed = MaxDopTransformer.AddMaxDopOne(sql);
+        try
+        {
+            var analyzed = sql;
+            if (MaxDopCheck.IsChecked == true)
+                analyzed = MaxDopTransformer.AddMaxDopOne(sql);
 
-        var report = _analyzer.Analyze(analyzed);
-        _allDiagnostics.Clear();
-        _allDiagnostics.AddRange(report.Diagnostics.OrderByDescending(x => x.Level).ThenBy(x => x.Line));
-        RefreshResults();
+            var report = _analyzer.Analyze(analyzed);
+            _allDiagnostics.Clear();
+            _allDiagnostics.AddRange(report.Diagnostics.OrderByDescending(x => x.Level).ThenBy(x => x.Line));
+            RefreshResults();
 
-        var counts = $"Critical: {report.Diagnostics.Count(d => d.Level == RiskLevel.Critical)}, " +
+            var counts = $"Critical: {report.Diagnostics.Count(d => d.Level == RiskLevel.Critical)}, " +
                      $"Warning: {report.Diagnostics.Count(d => d.Level == RiskLevel.Warning)}, " +
                      $"Info: {report.Diagnostics.Count(d => d.Level == RiskLevel.Info)}";
         StatusText.Text = $"{report.Total} diagnostic — {counts}" +
                           (MaxDopCheck.IsChecked == true ? " (MAXDOP 1 diterapkan)" : string.Empty);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Gagal menganalisis: {ex.Message}";
+        }
     }
 
     private void OnFilterChanged(object sender, RoutedEventArgs e)
