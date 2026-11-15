@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -26,6 +27,7 @@ public partial class MainWindow : Window
     private SqlAnalyzer _analyzer = new(DefaultRules);
     private AnalyzerSettings _settings = new();
     private ISqlMetadataReader? _metadataReader;
+    private bool _dark = false;
 
     public MainWindow()
     {
@@ -238,4 +240,27 @@ public partial class MainWindow : Window
             }
         }
     }
+
+    private void OnToggleThemeClick(object sender, RoutedEventArgs e)
+    {
+        var md = Application.Current.Resources.MergedDictionaries;
+        var light = md.FirstOrDefault(d => d.Source?.OriginalString.EndsWith("Light.xaml") == true);
+        var dark = md.FirstOrDefault(d => d.Source?.OriginalString.EndsWith("Dark.xaml") == true);
+        if (light is null || dark is null) return;
+        if (_dark)
+        {
+            md.Remove(dark);
+            md.Insert(0, light);
+            _dark = false;
+            ThemeToggle.Content = "Tema: Gelap";
+        }
+        else
+        {
+            md.Remove(light);
+            md.Insert(0, dark);
+            _dark = true;
+            ThemeToggle.Content = "Tema: Terang";
+        }
+    }
+
 }

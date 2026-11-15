@@ -5,7 +5,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="QAnalyzer — Static T-SQL Analyzer" Height="680" Width="1020"
-        MinHeight="420" MinWidth="640">
+        MinHeight="420" MinWidth="640"
+        Background="{DynamicResource AppBackgroundBrush}"
+        Foreground="{DynamicResource AppForegroundBrush}">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -17,6 +19,8 @@
 
         <!-- toolbar -->
         <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <Button x:Name="ThemeToggle" DockPanel.Dock="Right" Content="Tema: Gelap"
+                    Width="110" Height="30" Margin="8,0,0,0" Click="OnToggleThemeClick"/>
             <Button DockPanel.Dock="Left" Content="Buka .sql…" Width="100" Height="30" Click="OnOpenFileClick"/>
             <ComboBox x:Name="ProfileCombo" DockPanel.Dock="Left" Width="130" Margin="8,0,0,0"
                       Height="30" SelectionChanged="OnProfileChanged">
@@ -33,7 +37,9 @@
                  AcceptsReturn="True" AcceptsTab="True"
                  FontFamily="Consolas" FontSize="13"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                 TextWrapping="NoWrap" Padding="6"/>
+                 TextWrapping="NoWrap" Padding="6"
+                 Background="{DynamicResource EditableBackgroundBrush}"
+                 Foreground="{DynamicResource EditableForegroundBrush}"/>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,8">
             <Button Content="Analisis" Width="110" Height="30" Click="OnAnalyzeClick" FontWeight="SemiBold"/>
@@ -41,8 +47,10 @@
             <Button Content="Export MD…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportMarkdownClick"/>
             <Button Content="Export CSV…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportCsvClick"/>
             <Button Content="Tuning" Width="90" Height="30" Margin="8,0,0,0" Click="OnTuningClick" FontWeight="SemiBold"/>
-            <TextBlock x:Name="TuningStatus" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="DimGray"/>
-            <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center" Foreground="Gray"/>
+            <TextBlock x:Name="TuningStatus" Margin="12,6,0,0" VerticalAlignment="Center"
+                       Foreground="{DynamicResource MutedForegroundBrush}"/>
+            <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center"
+                       Foreground="{DynamicResource SecondaryMutedForegroundBrush}"/>
         </StackPanel>
 
         <!-- dashboard + filter -->
@@ -54,24 +62,30 @@
             <StackPanel Grid.Column="0" Orientation="Horizontal">
                 <TextBlock Text="Filter:" VerticalAlignment="Center"/>
                 <CheckBox x:Name="FilterCritical" Content="Critical" IsChecked="True" Margin="8,0,0,0"
-                          VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#C0392B"
+                          VerticalAlignment="Center" FontWeight="SemiBold"
+                          Foreground="{DynamicResource Level.CriticalForeground}"
                           Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
                 <CheckBox x:Name="FilterWarning" Content="Warning" IsChecked="True" Margin="8,0,0,0"
-                          VerticalAlignment="Center" Foreground="#B9770E"
+                          VerticalAlignment="Center"
+                          Foreground="{DynamicResource Level.WarningForeground}"
                           Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
                 <CheckBox x:Name="FilterInfo" Content="Info" IsChecked="True" Margin="8,0,0,0"
-                          VerticalAlignment="Center" Foreground="#2471A3"
+                          VerticalAlignment="Center"
+                          Foreground="{DynamicResource Level.InfoForeground}"
                           Checked="OnFilterChanged" Unchecked="OnFilterChanged"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Border Background="#FDE7E9" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
-                    <TextBlock x:Name="DashCritical" FontWeight="SemiBold" Foreground="#C0392B"/>
+                <Border Background="{DynamicResource Level.CriticalBackground}" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
+                    <TextBlock x:Name="DashCritical" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Level.CriticalForeground}"/>
                 </Border>
-                <Border Background="#FFF3DC" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
-                    <TextBlock x:Name="DashWarning" FontWeight="SemiBold" Foreground="#B9770E"/>
+                <Border Background="{DynamicResource Level.WarningBackground}" CornerRadius="4" Padding="10,3" Margin="0,0,6,0">
+                    <TextBlock x:Name="DashWarning" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Level.WarningForeground}"/>
                 </Border>
-                <Border Background="#EAF4FE" CornerRadius="4" Padding="10,3">
-                    <TextBlock x:Name="DashInfo" FontWeight="SemiBold" Foreground="#2471A3"/>
+                <Border Background="{DynamicResource Level.InfoBackground}" CornerRadius="4" Padding="10,3">
+                    <TextBlock x:Name="DashInfo" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Level.InfoForeground}"/>
                 </Border>
             </StackPanel>
         </Grid>
@@ -79,7 +93,9 @@
         <TextBox x:Name="TuningOutput" Grid.Row="4" Margin="0,8,0,0"
                  AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
                  VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" IsReadOnly="True"
-                 Visibility="Collapsed"/>
+                 Visibility="Collapsed"
+                 Background="{DynamicResource EditableBackgroundBrush}"
+                 Foreground="{DynamicResource EditableForegroundBrush}"/>
         <Grid Grid.Row="4" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -89,7 +105,21 @@
                       AutoGenerateColumns="False" IsReadOnly="True"
                       HeadersVisibility="Column" GridLinesVisibility="All"
                       RowHeight="26" CanUserResizeRows="False" SelectionMode="Single"
-                      SelectionChanged="OnResultSelected">
+                      SelectionChanged="OnResultSelected"
+                      Background="{DynamicResource EditableBackgroundBrush}"
+                      Foreground="{DynamicResource AppForegroundBrush}"
+                      RowBackground="{DynamicResource EditableBackgroundBrush}"
+                      AlternatingRowBackground="{DynamicResource PanelBackgroundBrush}"
+                      HorizontalGridLinesBrush="{DynamicResource SubtleBorderBrush}"
+                      VerticalGridLinesBrush="{DynamicResource SubtleBorderBrush}">
+                <DataGrid.ColumnHeaderStyle>
+                    <Style TargetType="DataGridColumnHeader">
+                        <Setter Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
+                        <Setter Property="Foreground" Value="{DynamicResource AppForegroundBrush}"/>
+                        <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorderBrush}"/>
+                        <Setter Property="FontWeight" Value="SemiBold"/>
+                    </Style>
+                </DataGrid.ColumnHeaderStyle>
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
                     <DataGridTextColumn Header="Rule" Binding="{Binding RuleId}" Width="110"/>
@@ -99,13 +129,16 @@
                 </DataGrid.Columns>
             </DataGrid>
             <Border Grid.Column="1" Width="320" Margin="8,0,0,0" Padding="8"
-                    BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="4">
+                    BorderBrush="{DynamicResource SubtleBorderBrush}" BorderThickness="1" CornerRadius="4"
+                    Background="{DynamicResource PanelBackgroundBrush}">
                 <StackPanel>
                     <TextBlock Text="Detail" FontWeight="SemiBold" Margin="0,0,0,4"/>
                     <TextBox x:Name="DetailText" IsReadOnly="True"
                              FontFamily="Consolas" FontSize="12"
                              VerticalScrollBarVisibility="Auto" TextWrapping="Wrap"
-                             Text="Pilih baris di daftar untuk melihat detail saran."/>
+                             Text="Pilih baris di daftar untuk melihat detail saran."
+                             Background="{DynamicResource EditableBackgroundBrush}"
+                             Foreground="{DynamicResource EditableForegroundBrush}"/>
                 </StackPanel>
             </Border>
         </Grid>
