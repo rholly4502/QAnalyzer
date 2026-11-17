@@ -1,0 +1,16 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qanalyzer-web
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+    networks:
+      - shared_bridge
+
+networks:
+  shared_bridge:
+    name: ${SHARED_NETWORK:-shared_bridge}
+    external: true
