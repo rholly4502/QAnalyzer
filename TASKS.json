@@ -129,7 +129,8 @@
  {
   "id": "P4.2",
   "title": "Verifikasi static serving /analyzer/ + contoh curl + update DEPLOY.md web",
-  "status": "pending",
-  "phase": "P4"
+  "status": "done",
+  "phase": "P4",
+  "note": "Verifikasi lokal: static /analyzer/ 200 (index+assets), /api/analyze 200, SQL kosong 400, test 41 hijau; contoh curl di DEPLOY.md"
  }
 ]
