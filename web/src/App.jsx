@@ -28,6 +28,11 @@ export default function App() {
     }
   }
 
+  const counts = result ? result.diagnostics.reduce((acc, d) => {
+    acc[d.level] = (acc[d.level] || 0) + 1;
+    return acc;
+  }, {}) : {};
+
   return (
     <div className="app">
       <h1>🔍 QAnalyzer — Web Demo</h1>
@@ -37,11 +42,11 @@ export default function App() {
 
       <div className="card">
         <label htmlFor="sql" style={{ fontWeight: 600 }}>Script T-SQL</label>
-        <textarea id="sql" value={sql} onChange={(e) => setSql(e.target.value)} />
+        <textarea id="sql" value={sql} onChange={(e) => setSql(e.target.value)} spellCheck={false} />
         <div className="row">
           <label className="opt">
             <input type="checkbox" checked={maxdop} onChange={(e) => setMaxdop(e.target.checked)} />
-            Update resource (MAXDOP 1)
+            Hemat resource (MAXDOP 1)
           </label>
           <label className="opt">
             Profile:
@@ -61,24 +66,43 @@ export default function App() {
         <div className="card">
           <div className="row" style={{ marginTop: 0, gap: 8 }}>
             <span className="badge total">Diagnostic: {result.total}</span>
+            {counts.Critical > 0 && <span className="badge Critical">Critical: {counts.Critical}</span>}
+            {counts.Warning > 0 && <span className="badge Warning">Warning: {counts.Warning}</span>}
+            {counts.Info > 0 && <span className="badge Info">Info: {counts.Info}</span>}
             {result.hasCritical && <span className="badge Critical">Ada Critical</span>}
           </div>
+
           {result.diagnostics.length === 0 ? (
             <p className="empty">Tidak ada temuan. ✓</p>
           ) : (
-            <ul className="diags">
-              {result.diagnostics.map((d, i) => (
-                <li key={i} className="diag">
-                  <div className="t">
-                    <span className={'badge ' + d.level}>{d.level}</span>
-                    <span>{d.title}</span>
-                    {d.line > 0 && <span className="pos">baris {d.line}</span>}
-                  </div>
-                  <p className="m">{d.message}</p>
-                  {d.suggestion && <p className="s">💡 {d.suggestion}</p>}
-                </li>
-              ))}
-            </ul>
+            <div className="tablewrap">
+              <table className="diags">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Aturan</th>
+                    <th>Temuan</th>
+                    <th>Baris</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.diagnostics.map((d, i) => (
+                    <tr key={i} className={`sev-${d.level.toLowerCase()}`}>
+                      <td><span className={'badge ' + d.level}>{d.level}</span></td>
+                      <td>
+                        <div className="tt">{d.title}</div>
+                        <div className="rid">{d.ruleId}</div>
+                      </td>
+                      <td>
+                        <div className="m">{d.message}</div>
+                        {d.suggestion && <div className="s">💡 {d.suggestion}</div>}
+                      </td>
+                      <td className="pos">{d.line > 0 ? d.line : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

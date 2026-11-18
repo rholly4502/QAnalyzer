@@ -123,7 +123,7 @@
  {
   "id": "P4.1",
   "title": "Polish UI web analyzer: input SQL, tabel hasil dengan warna severity, tampilan SQL transform",
-  "status": "pending",
+  "status": "done",
   "phase": "P4"
  },
  {
