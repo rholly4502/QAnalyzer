@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using QAnalyzer.Web.Security;
@@ -250,5 +251,73 @@ public class WebSecurityTests
         var origins = WebSecurityOptions.ResolveAllowedOrigins(config, isDevelopment: false);
 
         Assert.Equal(["https://rhol-ai.tech", "http://localhost:5173"], origins);
+    }
+
+    [Fact]
+    public void ResolveTrustedProxies_WhenUnset_ReturnsEmpty()
+    {
+        var config = new ConfigurationBuilder().Build();
+
+        var trusted = WebSecurityOptions.ResolveTrustedProxies(config);
+
+        Assert.False(trusted.HasEntries);
+        Assert.Empty(trusted.Proxies);
+        Assert.Empty(trusted.Networks);
+    }
+
+    [Fact]
+    public void ResolveTrustedProxies_ParsesSingleIpsAndCidrsAndDeduplicates()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:TrustedProxies:0"] = "127.0.0.1",
+                ["Security:TrustedProxies:1"] = "172.16.0.0/12",
+                ["TRUSTED_PROXIES"] = "127.0.0.1, ::1, fc00::/7, 172.16.0.0/12",
+            })
+            .Build();
+
+        var trusted = WebSecurityOptions.ResolveTrustedProxies(config);
+
+        Assert.True(trusted.HasEntries);
+        Assert.Equal([IPAddress.Loopback, IPAddress.IPv6Loopback], trusted.Proxies);
+        Assert.Equal([IPNetwork.Parse("172.16.0.0/12"), IPNetwork.Parse("fc00::/7")], trusted.Networks);
+    }
+
+    [Theory]
+    [InlineData("*")]
+    [InlineData("0.0.0.0")]
+    [InlineData("0.0.0.0/0")]
+    [InlineData("0.0.0.0/1")]
+    [InlineData("::/0")]
+    [InlineData("::")]
+    [InlineData("1234")]
+    [InlineData("10.1")]
+    [InlineData("10/8")]
+    [InlineData("172.16.0.5/12")]
+    [InlineData("10.0.0.0/99")]
+    [InlineData("not-an-ip")]
+    public void ResolveTrustedProxies_RejectsWildcardsBroadCidrsAndMalformedEntries(string invalidEntry)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["TRUSTED_PROXIES"] = invalidEntry,
+            })
+            .Build();
+
+        var trusted = WebSecurityOptions.ResolveTrustedProxies(config);
+
+        Assert.False(trusted.HasEntries);
+        Assert.Empty(trusted.Proxies);
+        Assert.Empty(trusted.Networks);
+    }
+
+    [Fact]
+    public void ResolveRateLimitPartitionKey_NormalizesIpv4MappedIpv6AndNull()
+    {
+        Assert.Equal("unknown", WebSecurityOptions.ResolveRateLimitPartitionKey(null));
+        Assert.Equal("203.0.113.5", WebSecurityOptions.ResolveRateLimitPartitionKey(IPAddress.Parse("::ffff:203.0.113.5")));
+        Assert.Equal("203.0.113.5", WebSecurityOptions.ResolveRateLimitPartitionKey(IPAddress.Parse("203.0.113.5")));
     }
 }

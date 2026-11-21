@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.StaticFiles;
 using QAnalyzer.Web.Security;
@@ -40,6 +41,7 @@ public partial class Program
         ArgumentNullException.ThrowIfNull(builder);
 
         var securityOptions = WebSecurityOptions.FromConfiguration(builder.Configuration);
+        var trustedProxies = WebSecurityOptions.ResolveTrustedProxies(builder.Configuration);
         var tuningOptions = TuningGatewayOptions.FromConfiguration(builder.Configuration);
         var allowedOrigins = WebSecurityOptions.ResolveAllowedOrigins(
             builder.Configuration,
@@ -57,6 +59,7 @@ public partial class Program
         });
 
         builder.Services.AddSingleton(securityOptions);
+        builder.Services.AddSingleton(trustedProxies);
         builder.Services.AddSingleton(tuningOptions);
         builder.Services.AddSingleton<AnalyzerService>();
         builder.Services.AddSingleton(_ => new HttpClient(new SocketsHttpHandler
@@ -103,7 +106,7 @@ public partial class Program
 
             options.AddPolicy("analyze", httpContext =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    partitionKey: WebSecurityOptions.ResolveRateLimitPartitionKey(httpContext.Connection.RemoteIpAddress),
                     factory: _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = securityOptions.RateLimitPermitLimit,
@@ -115,7 +118,7 @@ public partial class Program
             var tunePermitLimit = Math.Max(1, Math.Min(10, securityOptions.RateLimitPermitLimit));
             options.AddPolicy("tune", httpContext =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    partitionKey: WebSecurityOptions.ResolveRateLimitPartitionKey(httpContext.Connection.RemoteIpAddress),
                     factory: _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = tunePermitLimit,
@@ -138,6 +141,29 @@ public partial class Program
     public static void ConfigurePipeline(WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
+
+        var trustedProxies = app.Services.GetRequiredService<TrustedProxyOptions>();
+        if (trustedProxies.HasEntries)
+        {
+            var forwardedOptions = new ForwardedHeadersOptions
+            {
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+                ForwardLimit = 1,
+            };
+            forwardedOptions.KnownProxies.Clear();
+            forwardedOptions.KnownIPNetworks.Clear();
+            foreach (var proxy in trustedProxies.Proxies)
+            {
+                forwardedOptions.KnownProxies.Add(proxy);
+            }
+
+            foreach (var network in trustedProxies.Networks)
+            {
+                forwardedOptions.KnownIPNetworks.Add(network);
+            }
+
+            app.UseForwardedHeaders(forwardedOptions);
+        }
 
         app.UseMiddleware<WebSecurityHeadersMiddleware>();
         app.UseCors("QAnalyzerCors");
@@ -214,6 +240,7 @@ public partial class Program
             TuningService svc,
             WebSecurityOptions opts,
             TuningGatewayOptions tuningOpts,
+            ILogger<Program> logger,
             CancellationToken ct) =>
         {
             var failure = WebSecurityValidator.ValidateTuneRequest(req, opts.MaxSqlLength, opts.MaxPlanLength);
@@ -234,8 +261,12 @@ public partial class Program
                 var resp = await svc.TuneAsync(req, ct);
                 if (!resp.Success)
                 {
+                    var safeLogReason = (resp.Error ?? "unknown")
+                        .Replace('\r', ' ')
+                        .Replace('\n', ' ');
+                    logger.LogWarning("AI tuning gateway request failed: {Reason}", safeLogReason);
                     return Results.Json(
-                        new { error = resp.Error ?? "Gagal menghubungi layanan AI tuning." },
+                        new { error = "Gagal menghubungi layanan AI tuning. Coba lagi beberapa saat." },
                         statusCode: StatusCodes.Status502BadGateway);
                 }
 

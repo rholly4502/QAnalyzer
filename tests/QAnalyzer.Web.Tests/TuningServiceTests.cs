@@ -58,6 +58,47 @@ public class TuningServiceTests
         Assert.False(opts.IsConfigured);
     }
 
+    [Theory]
+    [InlineData("file:///etc/passwd")]
+    [InlineData("ftp://gw.internal/v1")]
+    [InlineData("https://user:pass@gw.internal/v1")]
+    [InlineData("https://gw.internal/v1?x=1")]
+    [InlineData("https://gw.internal/v1#frag")]
+    [InlineData("not-a-uri")]
+    public void FromConfiguration_RejectsInvalidOrNonHttpEndpoints(string invalidEndpoint)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["HERMES_TUNING_ENDPOINT"] = invalidEndpoint,
+                ["HERMES_TUNING_API_KEY"] = "test-key",
+            })
+            .Build();
+
+        var opts = TuningGatewayOptions.FromConfiguration(config);
+
+        Assert.False(opts.IsConfigured);
+        Assert.Equal(string.Empty, opts.Endpoint);
+        Assert.False(new TuningGatewayOptions { Endpoint = invalidEndpoint, ApiKey = "test-key" }.IsConfigured);
+    }
+
+    [Fact]
+    public void FromConfiguration_TrimsTrailingSlashOnValidEndpoint()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["HERMES_TUNING_ENDPOINT"] = "https://gateway.example.local/v1/",
+                ["HERMES_TUNING_API_KEY"] = "test-key",
+            })
+            .Build();
+
+        var opts = TuningGatewayOptions.FromConfiguration(config);
+
+        Assert.True(opts.IsConfigured);
+        Assert.Equal("https://gateway.example.local/v1", opts.Endpoint);
+    }
+
     [Fact]
     public void ValidateTuneRequest_EmptySql_Returns400()
     {

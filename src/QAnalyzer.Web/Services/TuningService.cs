@@ -32,7 +32,46 @@ public sealed class TuningGatewayOptions
     public string ApiKey { get; init; } = string.Empty;
 
     public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(Endpoint) && !string.IsNullOrWhiteSpace(ApiKey);
+        TryNormalizeEndpoint(Endpoint, out _) && !string.IsNullOrWhiteSpace(ApiKey);
+
+    public static bool TryNormalizeEndpoint(string? raw, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var trimmed = raw.Trim();
+        if (trimmed.Any(char.IsWhiteSpace)
+            || trimmed.Contains('?', StringComparison.Ordinal)
+            || trimmed.Contains('#', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(uri.Host)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+
+        normalized = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        return true;
+    }
 
     public static TuningGatewayOptions FromConfiguration(IConfiguration configuration)
     {
@@ -52,7 +91,7 @@ public sealed class TuningGatewayOptions
 
         return new TuningGatewayOptions
         {
-            Endpoint = endpoint?.Trim() ?? string.Empty,
+            Endpoint = TryNormalizeEndpoint(endpoint, out var normalizedEndpoint) ? normalizedEndpoint : string.Empty,
             ApiKey = apiKey?.Trim() ?? string.Empty,
         };
     }
@@ -120,7 +159,11 @@ public sealed class TuningService(ITuningAdvisorClient advisorClient)
         var combinedDiagnostics = new List<Diagnostic>(report.Diagnostics);
         if (!string.IsNullOrWhiteSpace(request.SqlPlanXml))
         {
-            combinedDiagnostics.AddRange(_planParser.Parse(request.SqlPlanXml));
+            foreach (var d in _planParser.Parse(request.SqlPlanXml))
+            {
+                var resolved = RuleLevel.Resolve(d.Level, settings, d.RuleId);
+                combinedDiagnostics.Add(resolved == d.Level ? d : d with { Level = resolved });
+            }
         }
 
         var tuningRequest = new TuningRequest(

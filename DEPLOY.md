@@ -5,6 +5,9 @@ Frontend (Vite) + API .NET dalam satu container. Route Caddy: `/analyzer/*` -> `
 ## Prasyarat
 1. Buat shared Docker network sekali: `docker network create shared_bridge`
 2. `.env` dengan `SHARED_NETWORK=shared_bridge` (atau default).
+3. Opsional di `.env`:
+   - `ALLOWED_ORIGINS` — daftar origin CORS dipisah koma (mis. `https://rhol-ai.tech`). Kosong = hanya same-origin.
+   - `TRUSTED_PROXIES` — IP/CIDR reverse proxy Caddy yang dipercaya untuk header `X-Forwarded-For` (mis. `172.16.0.0/12` sesuai subnet Docker `shared_bridge`) agar rate limiter membedakan IP asli pengguna. Kosong = abaikan header forwarded (aman dari spoofing).
 
 ## Build & run
 ```bash
