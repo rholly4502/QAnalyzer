@@ -231,4 +231,40 @@ public class TuningServiceTests
             SqlPlanXml = "<root><item /></root>",
         }));
     }
+
+    [Fact]
+    public async Task TuneAsync_HighVolumePlanDiagnostics_CapsDiagnosticsForwardedToAdvisor()
+    {
+        var client = new CapturingAdvisorClient(new TuningResponse(true, "Ringkas saran.", null));
+        var service = new TuningService(client);
+
+        var scans = string.Concat(Enumerable.Range(1, ExecutionPlanParser.MaxDiagnostics + 25).Select(i =>
+            $"""
+            <RelOp NodeId="{i}" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+              <TableScan><Object Schema="[dbo]" Table="[T{i}]" /></TableScan>
+            </RelOp>
+            """));
+
+        var planXml = $"""
+            <ShowPlanXML>
+              {scans}
+              <RelOp NodeId="9001" PhysicalOp="Sort" LogicalOp="Sort">
+                <Warnings><SpillToTempDb SpillLevel="1" /></Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = await service.TuneAsync(new TuneRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.Success);
+        Assert.True(resp.HasCritical);
+        Assert.NotNull(client.LastRequest);
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, client.LastRequest!.Diagnostics.Count);
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, resp.TotalDiagnostics);
+        Assert.Contains(client.LastRequest.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb);
+    }
 }

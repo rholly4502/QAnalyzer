@@ -269,4 +269,19 @@ public sealed class LocalExecutionPlanTests
         Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleNoJoinPredicate && d.Level == RiskLevel.Critical);
         Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMissingStatistics && d.Level == RiskLevel.Warning);
     }
+
+    [Fact]
+    public async Task LocalExecutionPlanAnalyzer_OverDeepPlanXml_ThrowsFormatException()
+    {
+        var depth = ExecutionPlanParser.MaxXmlDepth + 1;
+        var xml = $"<ShowPlanXML xmlns=\"{ShowPlanNs}\">"
+            + string.Concat(Enumerable.Repeat("<Node>", depth - 1))
+            + string.Concat(Enumerable.Repeat("</Node>", depth - 1))
+            + "</ShowPlanXML>";
+
+        var reader = new StubMetadataReader(new ExecutionPlanResult(xml, ExecutionPlanSource.PlanCache));
+        var analyzer = new LocalExecutionPlanAnalyzer([new SelectStarRule()]);
+
+        await Assert.ThrowsAsync<FormatException>(() => analyzer.AnalyzeAsync("SELECT Id FROM dbo.Orders;", reader));
+    }
 }

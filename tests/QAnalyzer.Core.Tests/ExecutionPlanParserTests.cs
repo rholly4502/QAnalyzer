@@ -369,4 +369,152 @@ public sealed class ExecutionPlanParserTests
         Assert.Contains(result, d => d.RuleId == ExecutionPlanParser.RuleImplicitConvert);
         Assert.Contains(result, d => d.RuleId == ExecutionPlanParser.RuleMissingStatistics);
     }
+
+    private static string BuildNestedShowPlan(int totalElementLevels)
+    {
+        var innerCount = Math.Max(0, totalElementLevels - 1);
+        return $"<ShowPlanXML xmlns=\"{ShowPlanNs}\">"
+            + string.Concat(Enumerable.Repeat("<Node>", innerCount))
+            + string.Concat(Enumerable.Repeat("</Node>", innerCount))
+            + "</ShowPlanXML>";
+    }
+
+    [Fact]
+    public void Parse_XmlExceedingMaxDepth_ThrowsFormatException()
+    {
+        var atLimitXml = BuildNestedShowPlan(ExecutionPlanParser.MaxXmlDepth);
+        var atLimitResult = _parser.Parse(atLimitXml);
+        Assert.Empty(atLimitResult);
+
+        var overLimitXml = BuildNestedShowPlan(ExecutionPlanParser.MaxXmlDepth + 1);
+        var ex = Assert.Throws<FormatException>(() => _parser.Parse(overLimitXml));
+        Assert.Contains(ExecutionPlanParser.MaxXmlDepth.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_RidLookupElement_ExtractsTableWithoutDescendingIntoChildRelOp()
+    {
+        var ridLookupXml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              <RelOp NodeId="1" PhysicalOp="RID Lookup" LogicalOp="RID Lookup">
+                <RIDLookup Lookup="true">
+                  <Object Database="[SalesDb]" Schema="[dbo]" Table="[HeapOrders]" />
+                </RIDLookup>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var ridResult = _parser.Parse(ridLookupXml);
+        var ridDiag = Assert.Single(ridResult, d => d.RuleId == ExecutionPlanParser.RuleKeyLookup);
+        Assert.Contains("dbo.HeapOrders", ridDiag.Message, StringComparison.Ordinal);
+
+        var nestedRelOpXml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              <RelOp NodeId="1" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+                <RelOp NodeId="2" PhysicalOp="Index Seek" LogicalOp="Index Seek">
+                  <IndexScan Ordered="true">
+                    <Object Schema="[dbo]" Table="[ChildOrders]" Index="[IX_Child]" />
+                  </IndexScan>
+                </RelOp>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var nestedResult = _parser.Parse(nestedRelOpXml);
+        var scanDiag = Assert.Single(nestedResult, d => d.RuleId == ExecutionPlanParser.RuleTableScan);
+        Assert.Contains("(tabel tidak diketahui)", scanDiag.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ChildOrders", scanDiag.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_ExcessiveIssues_CapsAtMaxDiagnosticsAndPrioritizesCriticalWarnings()
+    {
+        var scans = string.Concat(Enumerable.Range(1, ExecutionPlanParser.MaxDiagnostics + 30).Select(i =>
+            $"""
+            <RelOp NodeId="{i}" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+              <TableScan><Object Schema="[dbo]" Table="[T{i}]" /></TableScan>
+            </RelOp>
+            """));
+
+        var xml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              {scans}
+              <RelOp NodeId="9001" PhysicalOp="Sort" LogicalOp="Sort">
+                <Warnings><SpillToTempDb SpillLevel="1" /></Warnings>
+              </RelOp>
+              <RelOp NodeId="9002" PhysicalOp="Nested Loops" LogicalOp="Inner Join">
+                <Warnings NoJoinPredicate="true" />
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var result = _parser.Parse(xml);
+
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, result.Count);
+        Assert.Contains(result, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb && d.Level == RiskLevel.Critical);
+        Assert.Contains(result, d => d.RuleId == ExecutionPlanParser.RuleNoJoinPredicate && d.Level == RiskLevel.Critical);
+    }
+
+    [Fact]
+    public void Parse_ControlCharsNewlinesAndOversizedAttributes_AreSanitizedAndBounded()
+    {
+        var oversizedTable = "Orders&#x0A;- fake&#x0D;&#x09;" + new string('X', 250);
+        var equalityCols = string.Concat(Enumerable.Range(1, 25).Select(i => $"<Column Name=\"[Col_{i}]\" />"));
+        var includeCols = string.Concat(Enumerable.Range(1, 25).Select(i => $"<Column Name=\"[Inc_{i}]\" />"));
+
+        var xml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              <MissingIndexes>
+                <MissingIndexGroup Impact="95.0">
+                  <MissingIndex Schema="[dbo]" Table="[{oversizedTable}]">
+                    <ColumnGroup Usage="EQUALITY">{equalityCols}</ColumnGroup>
+                    <ColumnGroup Usage="INCLUDE">{includeCols}</ColumnGroup>
+                  </MissingIndex>
+                </MissingIndexGroup>
+              </MissingIndexes>
+              <RelOp NodeId="1" PhysicalOp="Sort&#x0A;Injected&#x09;Op" LogicalOp="Sort">
+                <Warnings>
+                  <SpillToTempDb SpillLevel="2&#x0D;&#x0A;fake" />
+                </Warnings>
+              </RelOp>
+              <RelOp NodeId="2" PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek">
+                <IndexScan Lookup="true" Ordered="true">
+                  <Object Schema="[dbo]" Table="[Orders]" Index="[PK_Orders&#x0A;{new string('I', 200)}]" />
+                </IndexScan>
+              </RelOp>
+              <Warnings>
+                <PlanAffectingConvert ConvertIssue="Seek&#x0A;Plan&#x0D;&#x09;Extra" Expression="CONVERT_IMPLICIT(nvarchar(20),&#x0D;&#x0A;&#x09;[dbo].[Orders].[Code],0)" />
+              </Warnings>
+            </ShowPlanXML>
+            """;
+
+        var result = _parser.Parse(xml);
+
+        Assert.Equal(4, result.Count);
+        foreach (var d in result)
+        {
+            Assert.DoesNotContain("\r", d.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("\n", d.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("\t", d.Message, StringComparison.Ordinal);
+            Assert.True(d.Message.Length < 1000, $"Message too long ({d.Message.Length}): {d.Message}");
+
+            if (d.Suggestion is not null)
+            {
+                Assert.DoesNotContain("\r", d.Suggestion, StringComparison.Ordinal);
+                Assert.DoesNotContain("\n", d.Suggestion, StringComparison.Ordinal);
+                Assert.DoesNotContain("\t", d.Suggestion, StringComparison.Ordinal);
+                Assert.True(d.Suggestion.Length < 1000, $"Suggestion too long ({d.Suggestion.Length}): {d.Suggestion}");
+            }
+        }
+
+        var missingIndexDiag = Assert.Single(result, d => d.RuleId == ExecutionPlanParser.RuleMissingIndex);
+        Assert.Contains("…", missingIndexDiag.Message, StringComparison.Ordinal);
+        Assert.Contains("Col_16", missingIndexDiag.Suggestion, StringComparison.Ordinal);
+        Assert.DoesNotContain("Col_17", missingIndexDiag.Suggestion, StringComparison.Ordinal);
+        Assert.Contains("Inc_16", missingIndexDiag.Suggestion, StringComparison.Ordinal);
+        Assert.DoesNotContain("Inc_17", missingIndexDiag.Suggestion, StringComparison.Ordinal);
+
+        var lookupDiag = Assert.Single(result, d => d.RuleId == ExecutionPlanParser.RuleKeyLookup);
+        Assert.Contains("…", lookupDiag.Message, StringComparison.Ordinal);
+    }
 }
