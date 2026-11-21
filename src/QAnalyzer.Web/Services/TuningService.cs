@@ -95,6 +95,8 @@ public sealed class TuningService(ITuningAdvisorClient advisorClient)
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new DeleteWithoutWhereRule(),
+        new TruncateTableRule(),
         new NonSargablePredicateRule(),
     ];
 
