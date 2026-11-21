@@ -44,6 +44,64 @@ public class WebSecurityTests
     }
 
     [Fact]
+    public void ValidateAnalyzeRequest_PlanOnlyWithoutSql_ReturnsNull()
+    {
+        var req = new AnalyzeRequest
+        {
+            Sql = "",
+            SqlPlanXml = "<ShowPlanXML />",
+        };
+
+        var result = WebSecurityValidator.ValidateAnalyzeRequest(req, 128, 256);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ValidateAnalyzeRequest_PlanExceedingMaxLength_Returns413()
+    {
+        var req = new AnalyzeRequest
+        {
+            Sql = "SELECT 1;",
+            SqlPlanXml = new string('P', 201),
+        };
+
+        var result = WebSecurityValidator.ValidateAnalyzeRequest(req, 1000, 200);
+
+        Assert.NotNull(result);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, result.StatusCode);
+        Assert.Contains("200", result.Error);
+    }
+
+    [Fact]
+    public void ValidateAnalyzeRequest_WhitespaceSqlExceedingMaxLengthWithPlan_Returns413()
+    {
+        var req = new AnalyzeRequest
+        {
+            Sql = new string(' ', 129),
+            SqlPlanXml = "<ShowPlanXML />",
+        };
+
+        var result = WebSecurityValidator.ValidateAnalyzeRequest(req, 128, 256);
+
+        Assert.NotNull(result);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, result.StatusCode);
+        Assert.Contains("128", result.Error);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ValidateAnalyzeRequest_InvalidMaxPlanLength_ThrowsArgumentOutOfRangeException(int invalidMaxPlanLength)
+    {
+        var req = new AnalyzeRequest { Sql = "SELECT 1;" };
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(
+            () => WebSecurityValidator.ValidateAnalyzeRequest(req, 128, invalidMaxPlanLength));
+        Assert.Equal("maxPlanLength", ex.ParamName);
+    }
+
+    [Fact]
     public void ResolveAllowedOrigins_ProductionWithNoConfig_ReturnsEmpty()
     {
         var config = new ConfigurationBuilder().Build();
@@ -107,6 +165,7 @@ public class WebSecurityTests
         var opts = WebSecurityOptions.FromConfiguration(config);
 
         Assert.Equal(WebSecurityOptions.DefaultMaxSqlLength, opts.MaxSqlLength);
+        Assert.Equal(WebSecurityOptions.DefaultMaxPlanLength, opts.MaxPlanLength);
         Assert.Equal(WebSecurityOptions.DefaultMaxRequestBodyBytes, opts.MaxRequestBodyBytes);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitPermitLimit, opts.RateLimitPermitLimit);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitWindowSeconds, opts.RateLimitWindowSeconds);
@@ -120,6 +179,7 @@ public class WebSecurityTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Security:MaxSqlLength"] = "-10",
+                ["Security:MaxPlanLength"] = "0",
                 ["Security:MaxRequestBodyBytes"] = "0",
                 ["Security:RateLimitPermitLimit"] = "abc",
                 ["Security:RateLimitWindowSeconds"] = "-5",
@@ -130,10 +190,26 @@ public class WebSecurityTests
         var opts = WebSecurityOptions.FromConfiguration(config);
 
         Assert.Equal(WebSecurityOptions.DefaultMaxSqlLength, opts.MaxSqlLength);
+        Assert.Equal(WebSecurityOptions.DefaultMaxPlanLength, opts.MaxPlanLength);
         Assert.Equal(WebSecurityOptions.DefaultMaxRequestBodyBytes, opts.MaxRequestBodyBytes);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitPermitLimit, opts.RateLimitPermitLimit);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitWindowSeconds, opts.RateLimitWindowSeconds);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitQueueLimit, opts.RateLimitQueueLimit);
+    }
+
+    [Fact]
+    public void FromConfiguration_ReadsValidMaxPlanLength()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:MaxPlanLength"] = "250000",
+            })
+            .Build();
+
+        var opts = WebSecurityOptions.FromConfiguration(config);
+
+        Assert.Equal(250_000, opts.MaxPlanLength);
     }
 
     [Theory]

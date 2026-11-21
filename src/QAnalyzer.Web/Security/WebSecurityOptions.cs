@@ -8,6 +8,7 @@ namespace QAnalyzer.Web.Security;
 public sealed class WebSecurityOptions
 {
     public const int DefaultMaxSqlLength = 100_000;
+    public const int DefaultMaxPlanLength = 100_000;
     public const long DefaultMaxRequestBodyBytes = 262_144; // 256 KB
     public const int DefaultRateLimitPermitLimit = 30;
     public const int DefaultRateLimitWindowSeconds = 60;
@@ -22,6 +23,7 @@ public sealed class WebSecurityOptions
     ];
 
     public int MaxSqlLength { get; init; } = DefaultMaxSqlLength;
+    public int MaxPlanLength { get; init; } = DefaultMaxPlanLength;
     public long MaxRequestBodyBytes { get; init; } = DefaultMaxRequestBodyBytes;
     public int RateLimitPermitLimit { get; init; } = DefaultRateLimitPermitLimit;
     public int RateLimitWindowSeconds { get; init; } = DefaultRateLimitWindowSeconds;
@@ -34,6 +36,7 @@ public sealed class WebSecurityOptions
         var section = configuration.GetSection("Security");
 
         var maxSqlLength = ParsePositiveInt(section["MaxSqlLength"], DefaultMaxSqlLength);
+        var maxPlanLength = ParsePositiveInt(section["MaxPlanLength"], DefaultMaxPlanLength);
         var maxRequestBodyBytes = ParsePositiveLong(section["MaxRequestBodyBytes"], DefaultMaxRequestBodyBytes);
         var permitLimit = ParsePositiveInt(section["RateLimitPermitLimit"], DefaultRateLimitPermitLimit);
         var windowSeconds = ParsePositiveInt(section["RateLimitWindowSeconds"], DefaultRateLimitWindowSeconds);
@@ -42,6 +45,7 @@ public sealed class WebSecurityOptions
         return new WebSecurityOptions
         {
             MaxSqlLength = maxSqlLength,
+            MaxPlanLength = maxPlanLength,
             MaxRequestBodyBytes = maxRequestBodyBytes,
             RateLimitPermitLimit = permitLimit,
             RateLimitWindowSeconds = windowSeconds,
