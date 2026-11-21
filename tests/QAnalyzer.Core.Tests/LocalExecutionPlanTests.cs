@@ -233,4 +233,40 @@ public sealed class LocalExecutionPlanTests
 
         await Assert.ThrowsAsync<FormatException>(() => analyzer.AnalyzeAsync("SELECT * FROM dbo.Orders;", reader));
     }
+
+    [Fact]
+    public async Task LocalExecutionPlanAnalyzer_DetectsNewPlanWarningsAndAppliesOverrides()
+    {
+        var xml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              <RelOp NodeId="1" PhysicalOp="Nested Loops" LogicalOp="Inner Join">
+                <Warnings NoJoinPredicate="true">
+                  <PlanAffectingConvert ConvertIssue="Seek Plan" Expression="CONVERT_IMPLICIT(nvarchar(50),[dbo].[Orders].[Code],0)" />
+                  <ColumnsWithNoStatistics>
+                    <ColumnReference Schema="[dbo]" Table="[Orders]" Column="[Status]" />
+                  </ColumnsWithNoStatistics>
+                </Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var settings = new AnalyzerSettings
+        {
+            RuleSeverityOverrides = new Dictionary<string, RiskLevel>
+            {
+                [ExecutionPlanParser.RuleImplicitConvert] = RiskLevel.Critical,
+            },
+        };
+        var reader = new StubMetadataReader(new ExecutionPlanResult(xml, ExecutionPlanSource.PlanCache));
+        var analyzer = new LocalExecutionPlanAnalyzer([new SelectStarRule()], settings);
+
+        var result = await analyzer.AnalyzeAsync("SELECT Id FROM dbo.Orders;", reader);
+
+        Assert.Equal(ExecutionPlanSource.PlanCache, result.PlanSource);
+        Assert.Equal(3, result.PlanDiagnosticCount);
+        var convertDiag = Assert.Single(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleImplicitConvert);
+        Assert.Equal(RiskLevel.Critical, convertDiag.Level);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleNoJoinPredicate && d.Level == RiskLevel.Critical);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMissingStatistics && d.Level == RiskLevel.Warning);
+    }
 }

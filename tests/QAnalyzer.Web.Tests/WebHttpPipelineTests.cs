@@ -501,4 +501,66 @@ public class WebHttpPipelineTests
             tempRoot.Delete(recursive: true);
         }
     }
+
+    [Fact]
+    public async Task AnalyzeAndTuneEndpoints_RejectNonShowPlanXmlWith400_AndSurfaceNewPlanWarnings()
+    {
+        const string planWithWarnings = """
+            <ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+              <RelOp NodeId="1" PhysicalOp="Nested Loops" LogicalOp="Inner Join">
+                <Warnings NoJoinPredicate="true">
+                  <PlanAffectingConvert ConvertIssue="Seek Plan" Expression="CONVERT_IMPLICIT(nvarchar(20),[dbo].[Orders].[Code],0)" />
+                  <ColumnsWithNoStatistics>
+                    <ColumnReference Schema="[dbo]" Table="[Orders]" Column="[Status]" />
+                  </ColumnsWithNoStatistics>
+                </Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var config = new Dictionary<string, string?>
+        {
+            ["HERMES_TUNING_ENDPOINT"] = "https://gateway.example.local/v1",
+            ["HERMES_TUNING_API_KEY"] = "test-key",
+        };
+        var stub = new StubAdvisorClient(new TuningResponse(true, "Tambahkan predicate ON dan update statistik.", null));
+        await using var host = await StartTestHostAsync(config, advisorClient: stub);
+
+        var analyzePayload = JsonSerializer.Serialize(new
+        {
+            sql = "",
+            sqlPlanXml = planWithWarnings,
+        });
+        using (var body = new StringContent(analyzePayload, Encoding.UTF8, "application/json"))
+        {
+            var resp = await host.Client.PostAsync("/analyzer/api/analyze", body);
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            using var json = await ReadJsonAsync(resp);
+            Assert.True(json.RootElement.GetProperty("hasCritical").GetBoolean());
+            Assert.Equal(3, json.RootElement.GetProperty("planDiagnosticCount").GetInt32());
+            var diagnostics = json.RootElement.GetProperty("diagnostics").EnumerateArray().ToList();
+            Assert.Contains(diagnostics, d => d.GetProperty("ruleId").GetString() == ExecutionPlanParser.RuleImplicitConvert);
+            Assert.Contains(diagnostics, d => d.GetProperty("ruleId").GetString() == ExecutionPlanParser.RuleNoJoinPredicate);
+            Assert.Contains(diagnostics, d => d.GetProperty("ruleId").GetString() == ExecutionPlanParser.RuleMissingStatistics);
+        }
+
+        var nonShowPlanPayload = JsonSerializer.Serialize(new
+        {
+            sql = "SELECT Id FROM dbo.Orders;",
+            sqlPlanXml = "<configuration><item /></configuration>",
+        });
+
+        foreach (var path in new[] { "/analyzer/api/analyze", "/analyzer/api/tune" })
+        {
+            using var badBody = new StringContent(nonShowPlanPayload, Encoding.UTF8, "application/json");
+            var badResp = await host.Client.PostAsync(path, badBody);
+            Assert.Equal(HttpStatusCode.BadRequest, badResp.StatusCode);
+            Assert.Equal("application/json", badResp.Content.Headers.ContentType?.MediaType);
+            using var errJson = await ReadJsonAsync(badResp);
+            var error = errJson.RootElement.GetProperty("error").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(error));
+            Assert.Contains("ShowPlanXML", error, StringComparison.Ordinal);
+            Assert.DoesNotContain("configuration", error, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 }
