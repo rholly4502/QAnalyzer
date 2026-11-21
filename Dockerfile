@@ -1,11 +1,11 @@
 # QAnalyzer Web — multi-stage build
-# Stage 1: build frontend (Vite) -> wwwroot
+# Stage 1: build frontend (Vite) -> /build/src/QAnalyzer.Web/wwwroot
 FROM node:20-alpine AS web
-WORKDIR /build
+WORKDIR /build/web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ .
-# vite outDir = ../src/QAnalyzer.Web/wwwroot (relatif ke web/)
+# vite outDir = ../src/QAnalyzer.Web/wwwroot (relatif ke /build/web)
 RUN npm run build
 
 # Stage 2: build backend .NET
@@ -14,9 +14,11 @@ WORKDIR /src
 COPY ["src/QAnalyzer.Core/QAnalyzer.Core.csproj", "QAnalyzer.Core/"]
 COPY ["src/QAnalyzer.Web/QAnalyzer.Web.csproj", "QAnalyzer.Web/"]
 RUN dotnet restore "QAnalyzer.Web/QAnalyzer.Web.csproj"
-COPY src/ src/
-# salin hasil web build ke wwwroot (sebelum publish)
-COPY --from=web /build/src/QAnalyzer.Web/wwwroot ./src/QAnalyzer.Web/wwwroot
+COPY src/QAnalyzer.Core/ QAnalyzer.Core/
+COPY src/QAnalyzer.Web/ QAnalyzer.Web/
+# bersihkan wwwroot lama lalu salin hasil web build (sebelum publish)
+RUN rm -rf /src/QAnalyzer.Web/wwwroot
+COPY --from=web /build/src/QAnalyzer.Web/wwwroot /src/QAnalyzer.Web/wwwroot
 WORKDIR /src/QAnalyzer.Web
 RUN dotnet publish -c Release -o /app --no-restore
 
