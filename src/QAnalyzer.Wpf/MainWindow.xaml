@@ -44,6 +44,7 @@
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,8">
             <Button Content="Analisis" Width="110" Height="30" Click="OnAnalyzeClick" FontWeight="SemiBold"/>
+            <Button x:Name="CheckPlanButton" Content="Cek Plan (Server)" Width="125" Height="30" Margin="8,0,0,0" Click="OnCheckPlanClick"/>
             <Button Content="Salin Laporan MD" Width="130" Height="30" Margin="8,0,0,0" Click="OnCopyMarkdownClick"/>
             <Button Content="Export MD…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportMarkdownClick"/>
             <Button Content="Export CSV…" Width="100" Height="30" Margin="8,0,0,0" Click="OnExportCsvClick"/>
