@@ -1,39 +1,51 @@
-using System.Text.RegularExpressions;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace QAnalyzer.Core.Rules;
 
 /// <summary>
-/// Deteksi `UPDATE` tanpa `WHERE` (risiko update massal tanpa rollback).
-/// Peringatan diabaikan bila penulis sengaja menyertakan log table / komentar,
-/// tapi default tetap Critical.
+/// Deteksi `UPDATE` tanpa `WHERE` via AST ScriptDom (risiko update massal tanpa rollback).
 /// </summary>
-public sealed class UpdateWithoutWhereRule : ISqlRule
+public sealed class UpdateWithoutWhereRule : IAstSqlRule
 {
     public string Id => "UPDATE_NO_WHERE";
     public string Title => "UPDATE tanpa klausa WHERE";
     public RiskLevel Level => RiskLevel.Critical;
 
-    private static readonly Regex UpdateRe = new(
-        @"\bUPDATE\s+[a-zA-Z_""\[\]]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     public IEnumerable<Diagnostic> Evaluate(string sql)
     {
-        foreach (Match m in UpdateRe.Matches(sql))
-        {
-            var start = m.Index + m.Length;
-            var rest = sql[start..];
-            // statement berakhir di ; atau di awal statement berikutnya (UPDATE/INSERT/DELETE/SELECT)
-            var nextStmt = new Regex(@"\b(SELECT|INSERT|DELETE|MERGE)\b", RegexOptions.IgnoreCase)
-                .Match(rest);
-            var len = nextStmt.Success ? nextStmt.Index : rest.Length;
-            var body = rest[..len];
-            if (Regex.IsMatch(body, @"\bWHERE\b", RegexOptions.IgnoreCase)) continue;
+        ArgumentNullException.ThrowIfNull(sql);
+        var fragment = SqlAstParser.Parse(sql);
+        return fragment is null ? [] : Evaluate(fragment);
+    }
 
-            var line = sql[..m.Index].Count(c => c == '\n') + 1;
-            yield return new Diagnostic(Level, Id, Title,
-                "UPDATE tanpa WHERE akan mengubah SEMUA baris — risiko massal tanpa rollback.",
-                "Tambahkan klausa WHERE; untuk batch production, gunakan log table + batch + PREVIEW.",
-                line, m.Index);
+    IEnumerable<Diagnostic> IAstSqlRule.Evaluate(TSqlFragment fragment) => Evaluate(fragment);
+
+    private IEnumerable<Diagnostic> Evaluate(TSqlFragment fragment)
+    {
+        ArgumentNullException.ThrowIfNull(fragment);
+        var visitor = new UpdateWithoutWhereVisitor();
+        fragment.Accept(visitor);
+
+        return visitor.Matches.Select(node => new Diagnostic(
+            Level,
+            Id,
+            Title,
+            "UPDATE tanpa WHERE akan mengubah SEMUA baris — risiko massal tanpa rollback.",
+            "Tambahkan klausa WHERE; untuk batch production, gunakan log table + batch + PREVIEW.",
+            node.StartLine,
+            node.StartColumn));
+    }
+
+    private sealed class UpdateWithoutWhereVisitor : TSqlFragmentVisitor
+    {
+        public List<UpdateSpecification> Matches { get; } = [];
+
+        public override void Visit(UpdateSpecification node)
+        {
+            if (node.WhereClause is null)
+            {
+                Matches.Add(node);
+            }
         }
     }
 }
