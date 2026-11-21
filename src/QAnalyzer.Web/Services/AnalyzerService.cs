@@ -1,5 +1,4 @@
 using QAnalyzer.Core;
-using QAnalyzer.Core.Rules;
 
 namespace QAnalyzer.Web.Services;
 
@@ -31,16 +30,7 @@ public sealed class AnalyzeResponse
 /// </summary>
 public sealed class AnalyzerService
 {
-    private static readonly ISqlRule[] DefaultRules =
-    [
-        new SqlSyntaxErrorRule(),
-        new SelectStarRule(),
-        new NoLockRule(),
-        new UpdateWithoutWhereRule(),
-        new DeleteWithoutWhereRule(),
-        new TruncateTableRule(),
-        new NonSargablePredicateRule(),
-    ];
+    private static readonly IReadOnlyList<ISqlRule> DefaultRules = SqlAnalyzer.CreateDefaultRules();
 
     private readonly ExecutionPlanParser _planParser = new();
 

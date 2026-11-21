@@ -39,4 +39,21 @@ public sealed class SqlAnalyzerTests
         var ex = Assert.Throws<ArgumentNullException>(() => analyzer.Analyze(null!));
         Assert.Equal("sql", ex.ParamName);
     }
+
+    [Fact]
+    public void CreateDefaultRules_IncludesAllBuiltInRulesWithoutDuplicateIds()
+    {
+        var rules = SqlAnalyzer.CreateDefaultRules();
+        var ids = rules.Select(r => r.Id).ToList();
+
+        Assert.Equal(ids.Count, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("SQL_SYNTAX_ERROR", ids);
+        Assert.Contains("SELECT_STAR", ids);
+        Assert.Contains("NOLOCK", ids);
+        Assert.Contains("UPDATE_NO_WHERE", ids);
+        Assert.Contains("DELETE_NO_WHERE", ids);
+        Assert.Contains("TRUNCATE_TABLE", ids);
+        Assert.Contains("NON_SARGABLE", ids);
+        Assert.Contains("DYNAMIC_SQL", ids);
+    }
 }
