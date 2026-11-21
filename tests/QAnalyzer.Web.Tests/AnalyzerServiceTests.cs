@@ -233,4 +233,52 @@ public class AnalyzerServiceTests
             SqlPlanXml = "<root><item /></root>",
         }));
     }
+
+    [Fact]
+    public void Analyze_OverDeepSqlPlanXml_ThrowsFormatException()
+    {
+        var depth = ExecutionPlanParser.MaxXmlDepth + 1;
+        var overDeepXml = "<ShowPlanXML>"
+            + string.Concat(Enumerable.Repeat("<Node>", depth - 1))
+            + string.Concat(Enumerable.Repeat("</Node>", depth - 1))
+            + "</ShowPlanXML>";
+
+        Assert.Throws<FormatException>(() => _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = overDeepXml,
+        }));
+    }
+
+    [Fact]
+    public void Analyze_HighVolumePlanDiagnostics_CapsDiagnosticsAtParserLimit()
+    {
+        var scans = string.Concat(Enumerable.Range(1, ExecutionPlanParser.MaxDiagnostics + 25).Select(i =>
+            $"""
+            <RelOp NodeId="{i}" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+              <TableScan><Object Schema="[dbo]" Table="[T{i}]" /></TableScan>
+            </RelOp>
+            """));
+
+        var planXml = $"""
+            <ShowPlanXML>
+              {scans}
+              <RelOp NodeId="9001" PhysicalOp="Sort" LogicalOp="Sort">
+                <Warnings><SpillToTempDb SpillLevel="1" /></Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.HasExecutionPlan);
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, resp.PlanDiagnosticCount);
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, resp.Total);
+        Assert.True(resp.HasCritical);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb && d.Level == "Critical");
+    }
 }

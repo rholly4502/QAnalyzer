@@ -728,4 +728,67 @@ public class WebHttpPipelineTests
             tempRoot.Delete(recursive: true);
         }
     }
+
+    [Fact]
+    public async Task AnalyzeAndTuneEndpoints_RejectOverDeepSqlPlanWith400_AndCapFloodedPlanDiagnostics()
+    {
+        var depth = ExecutionPlanParser.MaxXmlDepth + 1;
+        var overDeepPlanXml = "<ShowPlanXML>"
+            + string.Concat(Enumerable.Repeat("<Node>", depth - 1))
+            + string.Concat(Enumerable.Repeat("</Node>", depth - 1))
+            + "</ShowPlanXML>";
+
+        var config = new Dictionary<string, string?>
+        {
+            ["HERMES_TUNING_ENDPOINT"] = "https://gateway.example.local/v1",
+            ["HERMES_TUNING_API_KEY"] = "test-key",
+        };
+        var stub = new StubAdvisorClient(new TuningResponse(true, "OK", null));
+        await using var host = await StartTestHostAsync(config, advisorClient: stub);
+
+        var overDeepPayload = JsonSerializer.Serialize(new
+        {
+            sql = "SELECT Id FROM dbo.Orders;",
+            sqlPlanXml = overDeepPlanXml,
+        });
+
+        foreach (var path in new[] { "/analyzer/api/analyze", "/analyzer/api/tune" })
+        {
+            using var badBody = new StringContent(overDeepPayload, Encoding.UTF8, "application/json");
+            var badResp = await host.Client.PostAsync(path, badBody);
+            Assert.Equal(HttpStatusCode.BadRequest, badResp.StatusCode);
+            Assert.Equal("application/json", badResp.Content.Headers.ContentType?.MediaType);
+            using var errJson = await ReadJsonAsync(badResp);
+            Assert.False(string.IsNullOrWhiteSpace(errJson.RootElement.GetProperty("error").GetString()));
+        }
+
+        var scans = string.Concat(Enumerable.Range(1, ExecutionPlanParser.MaxDiagnostics + 25).Select(i =>
+            $"""
+            <RelOp NodeId="{i}" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+              <TableScan><Object Schema="[dbo]" Table="[T{i}]" /></TableScan>
+            </RelOp>
+            """));
+
+        var floodedPlanXml = $"""
+            <ShowPlanXML>
+              {scans}
+              <RelOp NodeId="9001" PhysicalOp="Sort" LogicalOp="Sort">
+                <Warnings><SpillToTempDb SpillLevel="1" /></Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var floodedPayload = JsonSerializer.Serialize(new
+        {
+            sql = "",
+            sqlPlanXml = floodedPlanXml,
+        });
+
+        using var floodedBody = new StringContent(floodedPayload, Encoding.UTF8, "application/json");
+        var floodedResp = await host.Client.PostAsync("/analyzer/api/analyze", floodedBody);
+        Assert.Equal(HttpStatusCode.OK, floodedResp.StatusCode);
+        using var floodedJson = await ReadJsonAsync(floodedResp);
+        Assert.Equal(ExecutionPlanParser.MaxDiagnostics, floodedJson.RootElement.GetProperty("planDiagnosticCount").GetInt32());
+        Assert.True(floodedJson.RootElement.GetProperty("hasCritical").GetBoolean());
+    }
 }

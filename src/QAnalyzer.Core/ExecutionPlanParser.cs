@@ -21,8 +21,15 @@ public sealed class ExecutionPlanParser
     public const string RuleNoJoinPredicate = "PLAN_NO_JOIN_PREDICATE";
     public const string RuleMissingStatistics = "PLAN_NO_STATISTICS";
 
+    public const int MaxXmlDepth = 256;
+    public const int MaxDiagnostics = 100;
+
     private const long MaxPlanCharacters = 10_000_000;
     private const int MaxExpressionPreviewLength = 160;
+    private const int MaxIdentifierLength = 128;
+    private const int MaxAttributeLength = 64;
+    private const int MaxIndexSuffixLength = 64;
+    private const int MaxMissingIndexColumnsPerGroup = 16;
     private const int MaxListedMissingStatColumns = 5;
 
     public IReadOnlyList<Diagnostic> Parse(string sqlPlanXml)
@@ -37,14 +44,8 @@ public sealed class ExecutionPlanParser
         XDocument document;
         try
         {
-            var settings = new XmlReaderSettings
-            {
-                DtdProcessing = DtdProcessing.Prohibit,
-                XmlResolver = null,
-                MaxCharactersInDocument = MaxPlanCharacters,
-                IgnoreComments = true,
-                IgnoreProcessingInstructions = true,
-            };
+            var settings = CreateXmlReaderSettings();
+            ValidateXmlStructure(sqlPlanXml, settings);
 
             using var stringReader = new StringReader(sqlPlanXml);
             using var xmlReader = XmlReader.Create(stringReader, settings);
@@ -67,25 +68,80 @@ public sealed class ExecutionPlanParser
             throw new FormatException("XML bukan SQL Server Execution Plan yang valid (elemen root harus <ShowPlanXML>).");
         }
 
+        // Prioritaskan temuan Critical terlebih dahulu agar tidak tergeser saat jumlah diagnostic dibatasi.
+        CollectTempDbSpills(root, diagnostics);
+        CollectNoJoinPredicates(root, diagnostics);
         CollectMissingIndexes(root, diagnostics);
         CollectOperatorIssues(root, diagnostics);
-        CollectTempDbSpills(root, diagnostics);
         CollectImplicitConversions(root, diagnostics);
-        CollectNoJoinPredicates(root, diagnostics);
         CollectColumnsWithNoStatistics(root, diagnostics);
 
         return diagnostics;
     }
 
+    private static XmlReaderSettings CreateXmlReaderSettings() => new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        XmlResolver = null,
+        MaxCharactersInDocument = MaxPlanCharacters,
+        IgnoreComments = true,
+        IgnoreProcessingInstructions = true,
+    };
+
+    private static void ValidateXmlStructure(string sqlPlanXml, XmlReaderSettings settings)
+    {
+        using var stringReader = new StringReader(sqlPlanXml);
+        using var xmlReader = XmlReader.Create(stringReader, settings);
+        var seenRoot = false;
+
+        while (xmlReader.Read())
+        {
+            if (xmlReader.NodeType != XmlNodeType.Element)
+            {
+                continue;
+            }
+
+            if (!seenRoot)
+            {
+                if (!string.Equals(xmlReader.LocalName, "ShowPlanXML", StringComparison.Ordinal))
+                {
+                    throw new FormatException("XML bukan SQL Server Execution Plan yang valid (elemen root harus <ShowPlanXML>).");
+                }
+
+                seenRoot = true;
+            }
+
+            if (xmlReader.Depth >= MaxXmlDepth)
+            {
+                throw new FormatException($"XML execution plan melebihi batas kedalaman maksimal {MaxXmlDepth} tingkat.");
+            }
+        }
+    }
+
     private static void CollectMissingIndexes(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var group in DescendantsByLocalName(root, "MissingIndexGroup"))
         {
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
             var impactRaw = (string?)group.Attribute("Impact");
             var impactText = FormatImpact(impactRaw);
 
             foreach (var missing in ElementsByLocalName(group, "MissingIndex"))
             {
+                if (diagnostics.Count >= MaxDiagnostics)
+                {
+                    return;
+                }
+
                 var table = FormatObjectName((string?)missing.Attribute("Schema"), (string?)missing.Attribute("Table"));
                 var equalityCols = ReadColumns(missing, "EQUALITY");
                 var inequalityCols = ReadColumns(missing, "INEQUALITY");
@@ -114,19 +170,35 @@ public sealed class ExecutionPlanParser
 
     private static void CollectOperatorIssues(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var relOp in DescendantsByLocalName(root, "RelOp"))
         {
-            var physicalOp = ((string?)relOp.Attribute("PhysicalOp"))?.Trim() ?? string.Empty;
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
+            var physicalOp = NormalizeSingleLine((string?)relOp.Attribute("PhysicalOp"), MaxAttributeLength);
             var indexScan = ElementsByLocalName(relOp, "IndexScan").FirstOrDefault();
-            var isLookupAttr = indexScan is not null && IsTruthy((string?)indexScan.Attribute("Lookup"));
+            var ridLookup = ElementsByLocalName(relOp, "RIDLookup").FirstOrDefault();
+            var hasIndexLookupAttr = indexScan is not null && IsTruthy((string?)indexScan.Attribute("Lookup"));
+            var hasRidLookupAttr = ridLookup is not null && IsTruthy((string?)ridLookup.Attribute("Lookup"));
+            var isLookupAttr = hasIndexLookupAttr || hasRidLookupAttr;
 
             if (isLookupAttr
                 || string.Equals(physicalOp, "Key Lookup", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(physicalOp, "RID Lookup", StringComparison.OrdinalIgnoreCase))
             {
-                var obj = FindTargetObject(indexScan ?? relOp);
+                var lookupContainer = hasIndexLookupAttr
+                    ? indexScan!
+                    : (hasRidLookupAttr ? ridLookup! : (indexScan ?? ridLookup ?? relOp));
+                var obj = FindScopedTargetObject(lookupContainer);
                 var table = FormatObjectName((string?)obj?.Attribute("Schema"), (string?)obj?.Attribute("Table"));
-                var indexName = StripBrackets((string?)obj?.Attribute("Index"));
+                var indexName = SanitizeIdentifier((string?)obj?.Attribute("Index"));
                 var (line, col) = GetLineInfo(relOp);
 
                 var targetDesc = string.IsNullOrEmpty(indexName)
@@ -148,7 +220,7 @@ public sealed class ExecutionPlanParser
             if (string.Equals(physicalOp, "Table Scan", StringComparison.OrdinalIgnoreCase))
             {
                 var tableScan = ElementsByLocalName(relOp, "TableScan").FirstOrDefault();
-                var obj = FindTargetObject(tableScan ?? relOp);
+                var obj = FindScopedTargetObject(tableScan ?? relOp);
                 var table = FormatObjectName((string?)obj?.Attribute("Schema"), (string?)obj?.Attribute("Table"));
                 var (line, col) = GetLineInfo(relOp);
 
@@ -166,11 +238,21 @@ public sealed class ExecutionPlanParser
 
     private static void CollectTempDbSpills(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var spill in DescendantsByLocalName(root, "SpillToTempDb"))
         {
-            var spillLevel = ((string?)spill.Attribute("SpillLevel"))?.Trim();
-            var parentRelOp = spill.Ancestors().FirstOrDefault(a => a.Name.LocalName == "RelOp");
-            var physicalOp = ((string?)parentRelOp?.Attribute("PhysicalOp"))?.Trim();
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
+            var spillLevel = NormalizeSingleLine((string?)spill.Attribute("SpillLevel"), MaxAttributeLength);
+            var parentRelOp = FindParentRelOp(spill);
+            var physicalOp = NormalizeSingleLine((string?)parentRelOp?.Attribute("PhysicalOp"), MaxAttributeLength);
             var (line, col) = GetLineInfo(spill);
 
             var opDesc = string.IsNullOrEmpty(physicalOp) ? "operator eksekusi" : $"operator {physicalOp}";
@@ -189,9 +271,19 @@ public sealed class ExecutionPlanParser
 
     private static void CollectImplicitConversions(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var convert in DescendantsByLocalName(root, "PlanAffectingConvert"))
         {
-            var convertIssue = ((string?)convert.Attribute("ConvertIssue"))?.Trim();
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
+            var convertIssue = NormalizeSingleLine((string?)convert.Attribute("ConvertIssue"), MaxAttributeLength);
             var exprPreview = FormatExpressionPreview((string?)convert.Attribute("Expression"));
             var exprDesc = string.IsNullOrEmpty(exprPreview) ? string.Empty : $" ({exprPreview})";
             var (line, col) = GetLineInfo(convert);
@@ -225,15 +317,25 @@ public sealed class ExecutionPlanParser
 
     private static void CollectNoJoinPredicates(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var warnings in DescendantsByLocalName(root, "Warnings"))
         {
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
             if (!IsTruthy((string?)warnings.Attribute("NoJoinPredicate")))
             {
                 continue;
             }
 
-            var parentRelOp = warnings.Ancestors().FirstOrDefault(a => a.Name.LocalName == "RelOp");
-            var physicalOp = ((string?)parentRelOp?.Attribute("PhysicalOp"))?.Trim();
+            var parentRelOp = FindParentRelOp(warnings);
+            var physicalOp = NormalizeSingleLine((string?)parentRelOp?.Attribute("PhysicalOp"), MaxAttributeLength);
             var (line, col) = GetLineInfo(warnings);
 
             var opDesc = string.IsNullOrEmpty(physicalOp) ? "operator join" : $"operator {physicalOp}";
@@ -251,8 +353,18 @@ public sealed class ExecutionPlanParser
 
     private static void CollectColumnsWithNoStatistics(XElement root, List<Diagnostic> diagnostics)
     {
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
         foreach (var missingStats in DescendantsByLocalName(root, "ColumnsWithNoStatistics"))
         {
+            if (diagnostics.Count >= MaxDiagnostics)
+            {
+                return;
+            }
+
             var columns = ElementsByLocalName(missingStats, "ColumnReference")
                 .Select(FormatColumnReference)
                 .Where(name => !string.IsNullOrEmpty(name))
@@ -297,12 +409,59 @@ public sealed class ExecutionPlanParser
         ElementsByLocalName(missingIndex, "ColumnGroup")
             .Where(cg => string.Equals((string?)cg.Attribute("Usage"), usage, StringComparison.OrdinalIgnoreCase))
             .SelectMany(cg => ElementsByLocalName(cg, "Column"))
-            .Select(c => StripBrackets((string?)c.Attribute("Name")))
+            .Select(c => SanitizeIdentifier((string?)c.Attribute("Name")))
             .Where(name => !string.IsNullOrEmpty(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxMissingIndexColumnsPerGroup)
             .ToList();
 
-    private static XElement? FindTargetObject(XElement container) =>
-        DescendantsByLocalName(container, "Object").FirstOrDefault();
+    private static XElement? FindScopedTargetObject(XElement container)
+    {
+        var stack = new Stack<XElement>();
+        PushChildrenReversed(stack, container);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current.Name.LocalName == "RelOp")
+            {
+                continue;
+            }
+
+            if (current.Name.LocalName == "Object")
+            {
+                return current;
+            }
+
+            PushChildrenReversed(stack, current);
+        }
+
+        return null;
+    }
+
+    private static void PushChildrenReversed(Stack<XElement> stack, XElement parent)
+    {
+        for (var node = parent.LastNode; node is not null; node = node.PreviousNode)
+        {
+            if (node is XElement child)
+            {
+                stack.Push(child);
+            }
+        }
+    }
+
+    private static XElement? FindParentRelOp(XElement element)
+    {
+        for (var current = element.Parent; current is not null; current = current.Parent)
+        {
+            if (current.Name.LocalName == "RelOp")
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
 
     private static string BuildCreateIndexSuggestion(string table, List<string> keyCols, List<string> includeCols)
     {
@@ -311,7 +470,7 @@ public sealed class ExecutionPlanParser
             return $"Evaluasi pembuatan nonclustered index pada {table} sesuai kolom filter query.";
         }
 
-        var safeTableSuffix = new string(table.Where(char.IsLetterOrDigit).ToArray());
+        var safeTableSuffix = new string(table.Where(char.IsLetterOrDigit).Take(MaxIndexSuffixLength).ToArray());
         if (string.IsNullOrEmpty(safeTableSuffix))
         {
             safeTableSuffix = "Table";
@@ -327,8 +486,8 @@ public sealed class ExecutionPlanParser
 
     private static string FormatObjectName(string? schema, string? table)
     {
-        var cleanSchema = StripBrackets(schema);
-        var cleanTable = StripBrackets(table);
+        var cleanSchema = SanitizeIdentifier(schema);
+        var cleanTable = SanitizeIdentifier(table);
 
         if (string.IsNullOrEmpty(cleanTable))
         {
@@ -340,9 +499,9 @@ public sealed class ExecutionPlanParser
 
     private static string FormatColumnReference(XElement colRef)
     {
-        var schema = StripBrackets((string?)colRef.Attribute("Schema"));
-        var table = StripBrackets((string?)colRef.Attribute("Table"));
-        var column = StripBrackets((string?)colRef.Attribute("Column"));
+        var schema = SanitizeIdentifier((string?)colRef.Attribute("Schema"));
+        var table = SanitizeIdentifier((string?)colRef.Attribute("Table"));
+        var column = SanitizeIdentifier((string?)colRef.Attribute("Column"));
         if (string.IsNullOrEmpty(column))
         {
             return string.Empty;
@@ -351,26 +510,76 @@ public sealed class ExecutionPlanParser
         return string.Join(".", new[] { schema, table, column }.Where(part => !string.IsNullOrEmpty(part)));
     }
 
-    private static string FormatExpressionPreview(string? raw)
+    private static string FormatExpressionPreview(string? raw) =>
+        NormalizeSingleLine(raw, MaxExpressionPreviewLength);
+
+    private static string SanitizeIdentifier(string? identifier)
     {
-        if (string.IsNullOrWhiteSpace(raw))
+        if (string.IsNullOrWhiteSpace(identifier))
         {
             return string.Empty;
         }
 
-        var normalized = string.Join(' ', raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (normalized.Length <= MaxExpressionPreviewLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..MaxExpressionPreviewLength] + "…";
+        var trimmed = identifier.Trim().Trim('[', ']');
+        return NormalizeSingleLine(trimmed, MaxIdentifierLength);
     }
 
-    private static string StripBrackets(string? identifier) =>
-        string.IsNullOrWhiteSpace(identifier)
-            ? string.Empty
-            : identifier.Trim().Trim('[', ']');
+    private static string NormalizeSingleLine(string? raw, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || maxLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder(Math.Min(raw.Length, maxLength + 1));
+        var pendingSpace = false;
+        var truncated = false;
+
+        foreach (var ch in raw)
+        {
+            if (char.IsWhiteSpace(ch) || char.IsControl(ch))
+            {
+                if (sb.Length > 0)
+                {
+                    pendingSpace = true;
+                }
+
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                if (sb.Length >= maxLength)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                sb.Append(' ');
+                pendingSpace = false;
+            }
+
+            if (sb.Length >= maxLength)
+            {
+                truncated = true;
+                break;
+            }
+
+            sb.Append(ch);
+        }
+
+        if (truncated)
+        {
+            while (sb.Length > 0 && sb[^1] == ' ')
+            {
+                sb.Length--;
+            }
+
+            sb.Append('…');
+        }
+
+        return sb.ToString();
+    }
 
     private static string FormatImpact(string? impactRaw) =>
         double.TryParse(impactRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var impact)
