@@ -17,6 +17,7 @@ public partial class MainWindow : Window
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new NonSargablePredicateRule(),
     ];
 
     private readonly ObservableCollection<Diagnostic> _diagnostics = [];

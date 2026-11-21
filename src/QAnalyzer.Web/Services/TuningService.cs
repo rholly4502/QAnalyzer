@@ -95,6 +95,7 @@ public sealed class TuningService(ITuningAdvisorClient advisorClient)
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new NonSargablePredicateRule(),
     ];
 
     private readonly ITuningAdvisorClient _advisorClient = advisorClient ?? throw new ArgumentNullException(nameof(advisorClient));
