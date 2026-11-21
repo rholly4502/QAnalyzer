@@ -135,4 +135,44 @@ public class WebSecurityTests
         Assert.Equal(WebSecurityOptions.DefaultRateLimitWindowSeconds, opts.RateLimitWindowSeconds);
         Assert.Equal(WebSecurityOptions.DefaultRateLimitQueueLimit, opts.RateLimitQueueLimit);
     }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("ftp://example.com")]
+    [InlineData("https://*.rhol-ai.tech")]
+    [InlineData("https://rhol-ai.tech/subpath")]
+    [InlineData("https://user:pass@rhol-ai.tech")]
+    [InlineData("not-a-uri")]
+    public void ResolveAllowedOrigins_RejectsMalformedWildcardAndNonHttpOrigins(string invalidOrigin)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ALLOWED_ORIGINS"] = invalidOrigin,
+            })
+            .Build();
+
+        Assert.Empty(WebSecurityOptions.ResolveAllowedOrigins(config, isDevelopment: false));
+
+        var devOrigins = WebSecurityOptions.ResolveAllowedOrigins(config, isDevelopment: true);
+        Assert.Equal(WebSecurityOptions.DefaultDevOrigins, devOrigins);
+    }
+
+    [Fact]
+    public void ResolveAllowedOrigins_NormalizesValidOriginsAndDropsInvalidOnes()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:AllowedOrigins:0"] = "https://RHOL-AI.TECH/",
+                ["Security:AllowedOrigins:1"] = "https://rhol-ai.tech/subpath",
+                ["ALLOWED_ORIGINS"] = "null, http://localhost:5173/, https://*.evil.test, javascript:alert(1)",
+            })
+            .Build();
+
+        var origins = WebSecurityOptions.ResolveAllowedOrigins(config, isDevelopment: false);
+
+        Assert.Equal(["https://rhol-ai.tech", "http://localhost:5173"], origins);
+    }
 }

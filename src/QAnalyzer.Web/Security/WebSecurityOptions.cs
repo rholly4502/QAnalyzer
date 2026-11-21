@@ -73,18 +73,66 @@ public sealed class WebSecurityOptions
             candidates.AddRange(envOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         }
 
-        var sanitized = candidates
-            .Select(o => o.Trim().TrimEnd('/'))
-            .Where(o => !string.IsNullOrWhiteSpace(o) && !string.Equals(o, "*", StringComparison.Ordinal))
+        var sanitized = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            if (TryNormalizeAllowedOrigin(candidate, out var normalized))
+            {
+                sanitized.Add(normalized);
+            }
+        }
+
+        var distinct = sanitized
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (sanitized.Length > 0)
+        if (distinct.Length > 0)
         {
-            return sanitized;
+            return distinct;
         }
 
         return isDevelopment ? [.. DefaultDevOrigins] : [];
+    }
+
+    private static bool TryNormalizeAllowedOrigin(string? raw, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var trimmed = raw.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed)
+            || trimmed.Contains('*', StringComparison.Ordinal)
+            || trimmed.Contains('?', StringComparison.Ordinal)
+            || trimmed.Contains('#', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(uri.Host)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment)
+            || (!string.IsNullOrEmpty(uri.AbsolutePath) && uri.AbsolutePath != "/"))
+        {
+            return false;
+        }
+
+        normalized = uri.GetLeftPart(UriPartial.Authority);
+        return true;
     }
 
     private static int ParsePositiveInt(string? raw, int fallback) =>
