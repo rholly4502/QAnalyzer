@@ -25,9 +25,20 @@ public interface ISqlMetadataReader : IDisposable
     /// </summary>
     IReadOnlyList<MissingIndex> GetMissingIndexes(string? dbName = null);
 
+    /// <summary>
+    /// Mengambil XML Execution Plan dari SQL Server tanpa mengeksekusi mutasi data:
+    /// pertama mencari di plan cache (DMV), lalu fallback ke estimated plan (SHOWPLAN_XML)
+    /// hanya untuk query baca yang lolos validasi AST.
+    /// </summary>
+    Task<ExecutionPlanResult?> GetExecutionPlanXmlAsync(string sqlText, CancellationToken ct = default);
+
     /// <summary>Menunjukkan apakah koneksi terbuka.</summary>
     bool IsConnected { get; }
 }
+
+public enum ExecutionPlanSource { PlanCache, EstimatedShowPlan }
+
+public sealed record ExecutionPlanResult(string PlanXml, ExecutionPlanSource Source);
 
 public sealed record MissingIndex(string Database, string Schema, string Table, string? EqualityColumns, string? InequalityColumns, string? IncludeColumns, long UserSeeks, long UserScans, long AvgUserImpact);
 

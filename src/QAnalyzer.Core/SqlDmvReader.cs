@@ -8,6 +8,25 @@ namespace QAnalyzer.Core;
 /// </summary>
 public sealed class SqlDmvReader : ISqlMetadataReader
 {
+    private const int DefaultCommandTimeoutSeconds = 15;
+
+    internal const string CachedPlanQuerySql = @"
+SELECT TOP 1
+    tqp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+CROSS APPLY sys.dm_exec_text_query_plan(
+    qs.plan_handle,
+    qs.statement_start_offset,
+    qs.statement_end_offset) tqp
+WHERE st.text LIKE @pattern ESCAPE '\'
+  AND tqp.query_plan IS NOT NULL
+  AND st.text NOT LIKE '%sys.dm_exec_text_query_plan%'
+ORDER BY qs.total_elapsed_time DESC;";
+
+    internal const string ShowPlanOnSql = "SET SHOWPLAN_XML ON;";
+    internal const string ShowPlanOffSql = "SET SHOWPLAN_XML OFF;";
+
     private readonly SqlConnection _conn;
 
     public SqlDmvReader(string connectionString)
@@ -18,6 +37,8 @@ public sealed class SqlDmvReader : ISqlMetadataReader
     public bool IsConnected => _conn.State == System.Data.ConnectionState.Open;
 
     public void Open() => _conn.Open();
+
+    public Task OpenAsync(CancellationToken ct = default) => _conn.OpenAsync(ct);
 
     public IReadOnlyList<QueryExecutionStat> GetTopQueryStats(int top)
     {
@@ -139,6 +160,86 @@ ORDER BY SUM(gs.user_seeks) + SUM(gs.user_scans) DESC;
                 r.IsDBNull(5) ? null : r.GetString(5),
                 r.GetInt64(6), r.GetInt64(7), r.GetInt64(8)));
         return list;
+    }
+
+    /// <summary>
+    /// Mengambil XML Execution Plan lokal tanpa mengeksekusi mutasi data:
+    /// cek plan cache terlebih dahulu via <c>sys.dm_exec_text_query_plan</c>,
+    /// lalu fallback ke <c>SET SHOWPLAN_XML ON</c> hanya jika lolos guard AST read-only.
+    /// </summary>
+    public async Task<ExecutionPlanResult?> GetExecutionPlanXmlAsync(string sqlText, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(sqlText);
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(sqlText)) return null;
+
+        if (!IsConnected) await OpenAsync(ct);
+
+        return await TryGetCachedExecutionPlanAsync(sqlText, ct)
+            ?? await TryGetEstimatedExecutionPlanAsync(sqlText, ct);
+    }
+
+    private async Task<ExecutionPlanResult?> TryGetCachedExecutionPlanAsync(string sqlText, CancellationToken ct)
+    {
+        var pattern = ExecutionPlanQueryGuard.BuildPlanCacheLikePattern(sqlText);
+        if (string.IsNullOrEmpty(pattern)) return null;
+
+        try
+        {
+            await using var cmd = new SqlCommand(CachedPlanQuerySql, _conn) { CommandTimeout = DefaultCommandTimeoutSeconds };
+            cmd.Parameters.Add("@pattern", System.Data.SqlDbType.NVarChar, 4000).Value = pattern;
+            var result = await cmd.ExecuteScalarAsync(ct);
+            return result is string xml && !string.IsNullOrWhiteSpace(xml)
+                ? new ExecutionPlanResult(xml, ExecutionPlanSource.PlanCache)
+                : null;
+        }
+        catch (SqlException ex) when (ex.Number is 297 or 300)
+        {
+            // Tidak memiliki izin VIEW SERVER STATE — lanjutkan ke estimated plan (SHOWPLAN_XML).
+            return null;
+        }
+    }
+
+    private async Task<ExecutionPlanResult?> TryGetEstimatedExecutionPlanAsync(string sqlText, CancellationToken ct)
+    {
+        if (!ExecutionPlanQueryGuard.CanSafelyEstimatePlan(sqlText, out _)) return null;
+
+        await using (var onCmd = new SqlCommand(ShowPlanOnSql, _conn) { CommandTimeout = DefaultCommandTimeoutSeconds })
+            await onCmd.ExecuteNonQueryAsync(ct);
+
+        try
+        {
+            await using var planCmd = new SqlCommand(sqlText, _conn) { CommandTimeout = DefaultCommandTimeoutSeconds };
+            await using var reader = await planCmd.ExecuteReaderAsync(ct);
+            do
+            {
+                while (await reader.ReadAsync(ct))
+                {
+                    var xml = reader.FieldCount > 0 && !await reader.IsDBNullAsync(0, ct)
+                        ? reader.GetValue(0)?.ToString()
+                        : null;
+                    if (!string.IsNullOrWhiteSpace(xml))
+                        return new ExecutionPlanResult(xml, ExecutionPlanSource.EstimatedShowPlan);
+                }
+            } while (await reader.NextResultAsync(ct));
+
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (_conn.State == System.Data.ConnectionState.Open)
+                {
+                    await using var offCmd = new SqlCommand(ShowPlanOffSql, _conn) { CommandTimeout = DefaultCommandTimeoutSeconds };
+                    await offCmd.ExecuteNonQueryAsync(CancellationToken.None);
+                }
+            }
+            catch
+            {
+                _conn.Close();
+            }
+        }
     }
 
     public void Dispose() => _conn.Dispose();

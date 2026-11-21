@@ -25,9 +25,11 @@ public partial class MainWindow : Window
     private LevelFilter _filter = new();
     private readonly AppSettingsScanner _scanner = new();
     private readonly HttpClient _http = new();
+    private readonly ExecutionPlanParser _planParser = new();
     private SqlAnalyzer _analyzer = new(DefaultRules);
     private AnalyzerSettings _settings = new();
     private ISqlMetadataReader? _metadataReader;
+    private CancellationTokenSource? _planCts;
     private bool _dark = false;
 
     public MainWindow()
@@ -76,6 +78,11 @@ public partial class MainWindow : Window
             {
                 _settings = scanned.Settings;
                 if (_settings.Profile == AnalysisProfile.Reporting) ProfileCombo.SelectedIndex = 1;
+                if (!string.IsNullOrWhiteSpace(scanned.ConnectionString))
+                {
+                    _metadataReader?.Dispose();
+                    _metadataReader = new SqlDmvReader(scanned.ConnectionString);
+                }
                 StatusText.Text = $"appsettings.json terbaca dari folder script ({(string.IsNullOrWhiteSpace(scanned.ConnectionString) ? "tanpa connection string" : "ada connection string")}).";
             }
         }
@@ -100,9 +107,7 @@ public partial class MainWindow : Window
                 analyzed = MaxDopTransformer.AddMaxDopOne(sql);
 
             var report = _analyzer.Analyze(analyzed);
-            _allDiagnostics.Clear();
-            _allDiagnostics.AddRange(report.Diagnostics.OrderByDescending(x => x.Level).ThenBy(x => x.Line));
-            RefreshResults();
+            SetDiagnostics(report.Diagnostics);
 
             var counts = $"Critical: {report.Diagnostics.Count(d => d.Level == RiskLevel.Critical)}, " +
                      $"Warning: {report.Diagnostics.Count(d => d.Level == RiskLevel.Warning)}, " +
@@ -127,6 +132,13 @@ public partial class MainWindow : Window
         RefreshResults();
     }
 
+    private void SetDiagnostics(IEnumerable<Diagnostic> items)
+    {
+        _allDiagnostics.Clear();
+        _allDiagnostics.AddRange(items.OrderByDescending(x => x.Level).ThenBy(x => x.Line));
+        RefreshResults();
+    }
+
     private void RefreshResults()
     {
         _diagnostics.Clear();
@@ -141,6 +153,42 @@ public partial class MainWindow : Window
         DashCritical.Text = $"Critical: {c.Critical}";
         DashWarning.Text = $"Warning: {c.Warning}";
         DashInfo.Text = $"Info: {c.Info}";
+    }
+
+    private async void OnCheckPlanClick(object sender, RoutedEventArgs e)
+    {
+        ResultsGrid.Visibility = Visibility.Visible;
+        TuningOutput.Visibility = Visibility.Collapsed;
+        var sql = ScriptEditor.Text;
+        if (string.IsNullOrWhiteSpace(sql)) { StatusText.Text = "Kosong — tempel script T-SQL dulu."; return; }
+        if (_metadataReader is null) { StatusText.Text = "Koneksi server belum dikonfigurasi — isi ConnectionStrings:Default di appsettings.json."; return; }
+
+        _planCts?.Cancel();
+        _planCts?.Dispose();
+        var cts = _planCts = new CancellationTokenSource();
+        CheckPlanButton.IsEnabled = false;
+        StatusText.Text = "Mengambil XML Execution Plan dari server…";
+
+        try
+        {
+            var targetSql = MaxDopCheck.IsChecked == true ? MaxDopTransformer.AddMaxDopOne(sql) : sql;
+            if (_metadataReader is SqlDmvReader live && !live.IsConnected) await live.OpenAsync(cts.Token);
+
+            var result = await new LocalExecutionPlanAnalyzer(DefaultRules, _settings, _planParser)
+                .AnalyzeAsync(targetSql, _metadataReader, cts.Token);
+            SetDiagnostics(result.Diagnostics);
+
+            var sourceLabel = result.PlanSource switch
+            {
+                ExecutionPlanSource.PlanCache => $"Plan Cache ({result.PlanDiagnosticCount} temuan plan)",
+                ExecutionPlanSource.EstimatedShowPlan => $"Estimated Plan SHOWPLAN_XML ({result.PlanDiagnosticCount} temuan plan)",
+                _ => result.PlanNote ?? "Execution plan tidak tersedia",
+            };
+            StatusText.Text = $"{result.Diagnostics.Count} diagnostic — {sourceLabel}";
+        }
+        catch (OperationCanceledException) { StatusText.Text = "Pengambilan execution plan dibatalkan."; }
+        catch (Exception ex) { StatusText.Text = $"Gagal mengambil execution plan: {ex.Message}"; }
+        finally { if (ReferenceEquals(_planCts, cts)) CheckPlanButton.IsEnabled = true; }
     }
 
     private async void OnTuningClick(object sender, RoutedEventArgs e)
@@ -161,14 +209,23 @@ public partial class MainWindow : Window
         try
         {
             var report = _analyzer.Analyze(sql);
-            if (_metadataReader is SqlDmvReader live && !live.IsConnected) live.Open();
+            if (_metadataReader is SqlDmvReader live && !live.IsConnected) await live.OpenAsync();
             var missing = _metadataReader is not null ? _metadataReader.GetMissingIndexes() : [];
             CachedQueryStat? cached = null;
+            var combinedDiagnostics = new List<Diagnostic>(report.Diagnostics);
             if (_metadataReader is not null)
+            {
                 cached = _metadataReader.GetStatsForSql(sql);
+                var plan = await _metadataReader.GetExecutionPlanXmlAsync(sql);
+                if (plan is not null && !string.IsNullOrWhiteSpace(plan.PlanXml))
+                {
+                    try { combinedDiagnostics.AddRange(_planParser.Parse(plan.PlanXml)); }
+                    catch (FormatException) { /* Abaikan XML plan korup agar tuning tetap berjalan. */ }
+                }
+            }
 
             var advisor = new HermesTuningAdvisor(_http, _settings.TuningEndpoint, _settings.TuningApiKey);
-            var resp = await advisor.AskAsync(new TuningRequest(sql, report.Diagnostics, missing, cached));
+            var resp = await advisor.AskAsync(new TuningRequest(sql, combinedDiagnostics, missing, cached));
 
             if (resp.Success)
             {
@@ -262,6 +319,15 @@ public partial class MainWindow : Window
             _dark = true;
             ThemeToggle.Content = "Tema: Terang";
         }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _planCts?.Cancel();
+        _planCts?.Dispose();
+        _metadataReader?.Dispose();
+        _http.Dispose();
+        base.OnClosed(e);
     }
 
 }
