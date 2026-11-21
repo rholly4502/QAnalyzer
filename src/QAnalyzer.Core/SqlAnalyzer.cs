@@ -22,6 +22,7 @@ public sealed class SqlAnalyzer
         new TruncateTableRule(),
         new NonSargablePredicateRule(),
         new DynamicSqlRule(),
+        new CursorUsageRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
