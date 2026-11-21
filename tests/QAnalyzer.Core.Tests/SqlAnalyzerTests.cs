@@ -55,5 +55,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("TRUNCATE_TABLE", ids);
         Assert.Contains("NON_SARGABLE", ids);
         Assert.Contains("DYNAMIC_SQL", ids);
+        Assert.Contains("CURSOR_USAGE", ids);
     }
 }
