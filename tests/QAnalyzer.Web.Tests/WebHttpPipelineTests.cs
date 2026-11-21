@@ -317,6 +317,126 @@ public class WebHttpPipelineTests
     }
 
     [Fact]
+    public async Task RateLimiter_WithoutTrustedProxies_IgnoresSpoofedXForwardedFor()
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["Security:RateLimitPermitLimit"] = "1",
+            ["Security:RateLimitWindowSeconds"] = "60",
+            ["Security:RateLimitQueueLimit"] = "0",
+        };
+        await using var host = await StartTestHostAsync(config);
+
+        using var firstReq = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        firstReq.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.10");
+        var firstResp = await host.Client.SendAsync(firstReq);
+        Assert.Equal(HttpStatusCode.OK, firstResp.StatusCode);
+
+        using var secondReq = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        secondReq.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.20");
+        var secondResp = await host.Client.SendAsync(secondReq);
+        Assert.Equal(HttpStatusCode.TooManyRequests, secondResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task RateLimiter_WithTrustedProxy_PartitionsByClientIpAndBlocksLeftmostSpoofing()
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["Security:RateLimitPermitLimit"] = "1",
+            ["Security:RateLimitWindowSeconds"] = "60",
+            ["Security:RateLimitQueueLimit"] = "0",
+            ["TRUSTED_PROXIES"] = "127.0.0.0/8",
+        };
+        await using var host = await StartTestHostAsync(config);
+
+        using var req1 = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        req1.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.10");
+        var resp1 = await host.Client.SendAsync(req1);
+        Assert.Equal(HttpStatusCode.OK, resp1.StatusCode);
+
+        using var req2 = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        req2.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.10");
+        var resp2 = await host.Client.SendAsync(req2);
+        Assert.Equal(HttpStatusCode.TooManyRequests, resp2.StatusCode);
+
+        using var spoofReq = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        spoofReq.Headers.TryAddWithoutValidation("X-Forwarded-For", "198.51.100.99, 203.0.113.10");
+        var spoofResp = await host.Client.SendAsync(spoofReq);
+        Assert.Equal(HttpStatusCode.TooManyRequests, spoofResp.StatusCode);
+
+        using var otherClientReq = new HttpRequestMessage(HttpMethod.Post, "/analyzer/api/analyze")
+        {
+            Content = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"),
+        };
+        otherClientReq.Headers.TryAddWithoutValidation("X-Forwarded-For", "203.0.113.20");
+        var otherClientResp = await host.Client.SendAsync(otherClientReq);
+        Assert.Equal(HttpStatusCode.OK, otherClientResp.StatusCode);
+    }
+
+    [Fact]
+    public async Task TuneEndpoint_WhenUpstreamFails_ReturnsSanitized502WithoutLeakingUpstreamDetails()
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["HERMES_TUNING_ENDPOINT"] = "https://gateway.example.local/v1",
+            ["HERMES_TUNING_API_KEY"] = "test-key",
+        };
+        var stub = new StubAdvisorClient(
+            new TuningResponse(false, string.Empty, "HTTP 500: internal-host:5000 stacktrace secret-detail"));
+
+        await using var host = await StartTestHostAsync(config, advisorClient: stub);
+
+        using var body = new StringContent("""{"sql":"SELECT Id FROM dbo.Orders;"}""", Encoding.UTF8, "application/json");
+        var resp = await host.Client.PostAsync("/analyzer/api/tune", body);
+
+        Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+        Assert.Equal("application/json", resp.Content.Headers.ContentType?.MediaType);
+        using var json = await ReadJsonAsync(resp);
+        var error = json.RootElement.GetProperty("error").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(error));
+        Assert.DoesNotContain("internal-host", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("5000", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("stacktrace", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret-detail", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TuneEndpoint_WithMalformedEndpointConfig_Returns503()
+    {
+        var config = new Dictionary<string, string?>
+        {
+            ["HERMES_TUNING_ENDPOINT"] = "file:///etc/passwd",
+            ["HERMES_TUNING_API_KEY"] = "test-key",
+        };
+
+        await using var host = await StartTestHostAsync(config);
+
+        using var body = new StringContent("""{"sql":"SELECT Id FROM dbo.Orders;"}""", Encoding.UTF8, "application/json");
+        var resp = await host.Client.PostAsync("/analyzer/api/tune", body);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+        Assert.Equal("application/json", resp.Content.Headers.ContentType?.MediaType);
+        using var json = await ReadJsonAsync(resp);
+        Assert.False(string.IsNullOrWhiteSpace(json.RootElement.GetProperty("error").GetString()));
+    }
+
+    [Fact]
     public async Task Cors_AllowsConfiguredOriginIncludingOnErrors_AndBlocksDisallowedOrigin()
     {
         var config = new Dictionary<string, string?>
