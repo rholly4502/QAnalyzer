@@ -122,6 +122,7 @@ jobs:
           test "$TUNE_STATUS" -eq 503
 
           curl -sS -D - -o /dev/null http://127.0.0.1:18080/api/health | grep -qi '^x-content-type-options: *nosniff'
+          curl -sS -D - -o /dev/null http://127.0.0.1:18080/api/health | grep -qi '^cache-control: *no-store'
 
           INDEX_HTML=$(curl -sf http://127.0.0.1:18080/analyzer/)
           echo "$INDEX_HTML" | grep -q '<div id="root">'

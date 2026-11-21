@@ -21,6 +21,12 @@ public sealed class WebSecurityHeadersMiddleware(RequestDelegate next)
         headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
         headers["Content-Security-Policy"] = ContentSecurityPolicy;
 
+        if (WebApiExceptionMiddleware.IsApiPath(context.Request.Path))
+        {
+            headers["Cache-Control"] = "no-store";
+            headers["Pragma"] = "no-cache";
+        }
+
         return next(context);
     }
 }

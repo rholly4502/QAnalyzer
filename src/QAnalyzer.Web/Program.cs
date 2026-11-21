@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.StaticFiles;
+using QAnalyzer.Core;
 using QAnalyzer.Web.Security;
 using QAnalyzer.Web.Services;
 
@@ -65,9 +66,13 @@ public partial class Program
         builder.Services.AddSingleton(_ => new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            AllowAutoRedirect = false,
+            UseCookies = false,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
         })
         {
             Timeout = TimeSpan.FromSeconds(30),
+            MaxResponseContentBufferSize = HermesTuningAdvisor.MaxResponseBytes,
         });
         builder.Services.AddSingleton<ITuningAdvisorClient, HermesTuningAdvisorClient>();
         builder.Services.AddSingleton<TuningService>();
