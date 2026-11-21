@@ -23,20 +23,27 @@ public sealed class SqlAnalyzer
         var report = new AnalysisReport { Sql = sql };
 
         TSqlFragment? parsedFragment = null;
+        IReadOnlyList<ParseError> parseErrors = [];
         var parsed = false;
 
         foreach (var rule in _rules)
         {
             IEnumerable<Diagnostic> diagnostics;
-            if (rule is IAstSqlRule astRule)
+            if (rule is IAstSqlRule or IAstParseErrorRule)
             {
                 if (!parsed)
                 {
-                    parsedFragment = SqlAstParser.Parse(sql);
+                    parsedFragment = SqlAstParser.Parse(sql, out var errors);
+                    parseErrors = errors as IReadOnlyList<ParseError> ?? errors.ToList();
                     parsed = true;
                 }
 
-                diagnostics = parsedFragment is null ? [] : astRule.Evaluate(parsedFragment);
+                diagnostics = rule switch
+                {
+                    IAstParseErrorRule errorRule => errorRule.Evaluate(parseErrors),
+                    IAstSqlRule astRule => parsedFragment is null ? [] : astRule.Evaluate(parsedFragment),
+                    _ => [],
+                };
             }
             else
             {
