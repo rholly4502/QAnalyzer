@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using QAnalyzer.Core;
@@ -561,6 +562,170 @@ public class WebHttpPipelineTests
             Assert.False(string.IsNullOrWhiteSpace(error));
             Assert.Contains("ShowPlanXML", error, StringComparison.Ordinal);
             Assert.DoesNotContain("configuration", error, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task TuneEndpoint_OutboundHttpClient_BlocksRedirectsAndPreventsCookieLeakage()
+    {
+        var secretHit = false;
+        var cookieLeaked = false;
+
+        var upstreamBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+        });
+        upstreamBuilder.WebHost.UseUrls("http://127.0.0.1:0");
+
+        await using var upstreamApp = upstreamBuilder.Build();
+
+        upstreamApp.MapPost("/redirect/v1/chat/completions", (HttpContext ctx) =>
+        {
+            ctx.Response.StatusCode = StatusCodes.Status302Found;
+            ctx.Response.Headers.Location = "/internal-secret";
+            return Task.CompletedTask;
+        });
+
+        upstreamApp.MapMethods("/internal-secret", ["GET", "POST"], () =>
+        {
+            Volatile.Write(ref secretHit, true);
+            return Results.Ok(new { choices = new[] { new { message = new { content = "SECRET" } } } });
+        });
+
+        upstreamApp.MapPost("/cookie/v1/chat/completions", (HttpContext ctx) =>
+        {
+            if (ctx.Request.Headers.ContainsKey("Cookie"))
+            {
+                Volatile.Write(ref cookieLeaked, true);
+            }
+
+            ctx.Response.Headers.Append("Set-Cookie", "session=user-a-token; Path=/");
+            return Results.Ok(new { choices = new[] { new { message = new { content = "Saran aman." } } } });
+        });
+
+        upstreamApp.MapPost("/oversized/v1/chat/completions", async (HttpContext ctx) =>
+        {
+            ctx.Response.StatusCode = StatusCodes.Status200OK;
+            ctx.Response.ContentType = "application/json";
+            var payload = "{\"choices\":[{\"message\":{\"content\":\""
+                + new string('A', HermesTuningAdvisor.MaxResponseBytes + 1024)
+                + "\"}}]}";
+            await ctx.Response.WriteAsync(payload);
+        });
+
+        await upstreamApp.StartAsync();
+        try
+        {
+            var upstreamBase = upstreamApp.Urls.First().TrimEnd('/');
+
+            // 1. Redirect SSRF block
+            await using (var redirectHost = await StartTestHostAsync(new Dictionary<string, string?>
+            {
+                ["HERMES_TUNING_ENDPOINT"] = $"{upstreamBase}/redirect/v1",
+                ["HERMES_TUNING_API_KEY"] = "test-key",
+            }))
+            {
+                using var body = new StringContent("""{"sql":"SELECT Id FROM dbo.Orders;"}""", Encoding.UTF8, "application/json");
+                var resp = await redirectHost.Client.PostAsync("/analyzer/api/tune", body);
+                Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+                Assert.Equal("application/json", resp.Content.Headers.ContentType?.MediaType);
+                using var json = await ReadJsonAsync(resp);
+                var error = json.RootElement.GetProperty("error").GetString();
+                Assert.False(string.IsNullOrWhiteSpace(error));
+                Assert.DoesNotContain("internal-secret", error, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("302", error, StringComparison.Ordinal);
+                Assert.False(Volatile.Read(ref secretHit));
+            }
+
+            // 2. Cookie isolation across users
+            await using (var cookieHost = await StartTestHostAsync(new Dictionary<string, string?>
+            {
+                ["HERMES_TUNING_ENDPOINT"] = $"{upstreamBase}/cookie/v1",
+                ["HERMES_TUNING_API_KEY"] = "test-key",
+            }))
+            {
+                for (var i = 0; i < 2; i++)
+                {
+                    using var body = new StringContent("""{"sql":"SELECT Id FROM dbo.Orders;"}""", Encoding.UTF8, "application/json");
+                    var resp = await cookieHost.Client.PostAsync("/analyzer/api/tune", body);
+                    Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+                    using var json = await ReadJsonAsync(resp);
+                    Assert.True(json.RootElement.GetProperty("success").GetBoolean());
+                }
+
+                Assert.False(Volatile.Read(ref cookieLeaked));
+            }
+
+            // 3. Oversized response protection
+            await using (var oversizedHost = await StartTestHostAsync(new Dictionary<string, string?>
+            {
+                ["HERMES_TUNING_ENDPOINT"] = $"{upstreamBase}/oversized/v1",
+                ["HERMES_TUNING_API_KEY"] = "test-key",
+            }))
+            {
+                using var body = new StringContent("""{"sql":"SELECT Id FROM dbo.Orders;"}""", Encoding.UTF8, "application/json");
+                var resp = await oversizedHost.Client.PostAsync("/analyzer/api/tune", body);
+                Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+                Assert.Equal("application/json", resp.Content.Headers.ContentType?.MediaType);
+                using var json = await ReadJsonAsync(resp);
+                var error = json.RootElement.GetProperty("error").GetString();
+                Assert.False(string.IsNullOrWhiteSpace(error));
+                Assert.DoesNotContain(HermesTuningAdvisor.MaxResponseBytes.ToString(), error, StringComparison.Ordinal);
+                Assert.DoesNotContain("AAAA", error, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            await upstreamApp.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ApiResponses_EmitNoStoreCacheHeaders_WhileStaticAssetsDoNot()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory("qanalyzer-cache-headers-");
+        try
+        {
+            var assetsDir = Path.Combine(tempRoot.FullName, "wwwroot", "assets");
+            Directory.CreateDirectory(assetsDir);
+            await File.WriteAllTextAsync(
+                Path.Combine(tempRoot.FullName, "wwwroot", "index.html"),
+                "<!doctype html><html><body><div id=\"root\"></div></body></html>");
+            await File.WriteAllTextAsync(
+                Path.Combine(assetsDir, "app.js"),
+                "console.log('ok');");
+
+            await using var host = await StartTestHostAsync(contentRootPath: tempRoot.FullName);
+
+            var healthResp = await host.Client.GetAsync("/api/health");
+            Assert.Equal(HttpStatusCode.OK, healthResp.StatusCode);
+            Assert.True(healthResp.Headers.CacheControl?.NoStore);
+            Assert.Contains("no-cache", healthResp.Headers.Pragma.ToString(), StringComparison.OrdinalIgnoreCase);
+
+            using (var okBody = new StringContent("""{"sql":"SELECT 1;"}""", Encoding.UTF8, "application/json"))
+            {
+                var analyzeResp = await host.Client.PostAsync("/api/analyze", okBody);
+                Assert.Equal(HttpStatusCode.OK, analyzeResp.StatusCode);
+                Assert.True(analyzeResp.Headers.CacheControl?.NoStore);
+                Assert.Contains("no-cache", analyzeResp.Headers.Pragma.ToString(), StringComparison.OrdinalIgnoreCase);
+            }
+
+            using (var badBody = new StringContent("""{"sql":""}""", Encoding.UTF8, "application/json"))
+            {
+                var errAnalyzeResp = await host.Client.PostAsync("/analyzer/api/analyze", badBody);
+                Assert.Equal(HttpStatusCode.BadRequest, errAnalyzeResp.StatusCode);
+                Assert.True(errAnalyzeResp.Headers.CacheControl?.NoStore);
+                Assert.Contains("no-cache", errAnalyzeResp.Headers.Pragma.ToString(), StringComparison.OrdinalIgnoreCase);
+            }
+
+            var assetResp = await host.Client.GetAsync("/analyzer/assets/app.js");
+            Assert.Equal(HttpStatusCode.OK, assetResp.StatusCode);
+            Assert.NotEqual(true, assetResp.Headers.CacheControl?.NoStore);
+            Assert.False(assetResp.Headers.TryGetValues("Pragma", out _));
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
         }
     }
 }
