@@ -33,6 +33,8 @@ public sealed class AnalyzerService
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new DeleteWithoutWhereRule(),
+        new TruncateTableRule(),
         new NonSargablePredicateRule(),
     ];
 

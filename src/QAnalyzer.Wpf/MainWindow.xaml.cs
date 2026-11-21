@@ -17,6 +17,8 @@ public partial class MainWindow : Window
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new DeleteWithoutWhereRule(),
+        new TruncateTableRule(),
         new NonSargablePredicateRule(),
     ];
 
