@@ -1,3 +1,5 @@
+using Microsoft.SqlServer.TransactSql.ScriptDom;
+
 namespace QAnalyzer.Core;
 
 /// <summary>
@@ -19,9 +21,29 @@ public sealed class SqlAnalyzer
     {
         ArgumentNullException.ThrowIfNull(sql);
         var report = new AnalysisReport { Sql = sql };
+
+        TSqlFragment? parsedFragment = null;
+        var parsed = false;
+
         foreach (var rule in _rules)
         {
-            foreach (var d in rule.Evaluate(sql))
+            IEnumerable<Diagnostic> diagnostics;
+            if (rule is IAstSqlRule astRule)
+            {
+                if (!parsed)
+                {
+                    parsedFragment = SqlAstParser.Parse(sql);
+                    parsed = true;
+                }
+
+                diagnostics = parsedFragment is null ? [] : astRule.Evaluate(parsedFragment);
+            }
+            else
+            {
+                diagnostics = rule.Evaluate(sql);
+            }
+
+            foreach (var d in diagnostics)
             {
                 var resolved = RuleLevel.Resolve(d.Level, _settings, rule.Id);
                 report.Diagnostics.Add(resolved == d.Level ? d : d with { Level = resolved });
