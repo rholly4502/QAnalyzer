@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-qanalyzer-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
@@ -28,11 +32,24 @@ jobs:
             docker network inspect shared_bridge >/dev/null 2>&1 || docker network create shared_bridge
             cd /opt/QAnalyzer
             git fetch --prune origin main && git reset --hard origin/main
-            git clean -fd
-            docker compose up -d --build
-            sleep 6
+            git clean -fd -e .env -e '.env.*'
+            docker compose up -d --build --remove-orphans
+            HEALTHY=0
+            for i in $(seq 1 20); do
+              CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' qanalyzer-web 2>/dev/null | awk 'NF {print; exit}' || true)
+              if [ -n "$CONTAINER_IP" ] && curl -sf --max-time 3 "http://${CONTAINER_IP}:8080/api/health" | grep -q '"ok"'; then
+                HEALTHY=1
+                echo "analyzer_health=ok (${CONTAINER_IP}:8080)"
+                break
+              fi
+              sleep 1
+            done
             docker compose ps
-            curl -s -o /dev/null -w "analyzer_http=%{http_code}\n" http://localhost:8080/api/health || echo "health check failed"
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "ERROR: health check qanalyzer-web gagal"
+              docker logs --tail 50 qanalyzer-web || true
+              exit 1
+            fi
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh

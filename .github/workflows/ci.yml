@@ -77,12 +77,19 @@ jobs:
           CID=$(docker run -d -p 127.0.0.1:18080:8080 qanalyzer-web:ci)
           trap 'docker logs "$CID" || true; docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
+          CONTAINER_UID=$(docker exec "$CID" id -u)
+          test "$CONTAINER_UID" -ne 0
+
+          HEALTHY=0
           for i in $(seq 1 20); do
-            if curl -sf http://127.0.0.1:18080/api/health | grep -q '"ok"'; then
+            CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' "$CID" 2>/dev/null | awk 'NF {print; exit}' || true)
+            if [ -n "$CONTAINER_IP" ] && curl -sf --max-time 3 "http://${CONTAINER_IP}:8080/api/health" | grep -q '"ok"'; then
+              HEALTHY=1
               break
             fi
             sleep 1
           done
+          test "$HEALTHY" -eq 1
 
           curl -sf http://127.0.0.1:18080/api/health | grep -q '"ok"'
 
@@ -93,6 +100,16 @@ jobs:
           curl -sf -X POST http://127.0.0.1:18080/analyzer/api/analyze \
             -H 'Content-Type: application/json' \
             -d '{"sql":"SELECT * FROM dbo.Orders;"}' | grep -q 'SELECT_STAR'
+
+          EMPTY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/api/analyze \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":""}')
+          test "$EMPTY_STATUS" -eq 400
+
+          TUNE_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/api/tune \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":"SELECT Id FROM dbo.Orders;"}')
+          test "$TUNE_STATUS" -eq 503
 
           curl -sS -D - -o /dev/null http://127.0.0.1:18080/api/health | grep -qi '^x-content-type-options: *nosniff'
 

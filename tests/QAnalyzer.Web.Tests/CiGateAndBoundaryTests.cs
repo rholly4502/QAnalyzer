@@ -139,4 +139,57 @@ public class CiGateAndBoundaryTests
         Assert.Contains("/api/analyze", yaml);
         Assert.Contains("/analyzer/", yaml);
     }
+
+    [Fact]
+    public void DeployWorkflow_SerializesConcurrentDeploys_PreservesEnv_AndChecksContainerHealth()
+    {
+        var deployPath = Path.Combine(FindRepoRoot(), ".github", "workflows", "deploy.yml");
+        Assert.True(File.Exists(deployPath), $"Workflow deploy tidak ditemukan: {deployPath}");
+
+        var yaml = File.ReadAllText(deployPath);
+
+        Assert.Matches(new Regex(@"(?m)^concurrency:\s*$"), yaml);
+        Assert.Matches(new Regex(@"(?m)^\s*cancel-in-progress:\s*false\s*$"), yaml);
+        Assert.Contains("git clean -fd -e .env", yaml);
+        Assert.Contains("docker inspect", yaml);
+        Assert.Contains("/api/health", yaml);
+        Assert.Contains("exit 1", yaml);
+        Assert.DoesNotContain("http://localhost:8080/api/health", yaml);
+    }
+
+    [Fact]
+    public void Dockerfile_RunsRuntimeStageAsNonRootUser()
+    {
+        var dockerfilePath = Path.Combine(FindRepoRoot(), "Dockerfile");
+        Assert.True(File.Exists(dockerfilePath), $"Dockerfile tidak ditemukan: {dockerfilePath}");
+
+        var content = File.ReadAllText(dockerfilePath);
+        var runtimeIndex = content.IndexOf("AS runtime", StringComparison.OrdinalIgnoreCase);
+        Assert.True(runtimeIndex >= 0, "Stage 'AS runtime' tidak ditemukan di Dockerfile.");
+
+        var runtimeStage = content[runtimeIndex..];
+        Assert.Matches(new Regex(@"(?m)^\s*USER\s+(?!root\b|0\b)\S+\s*$"), runtimeStage);
+    }
+
+    [Fact]
+    public void GitIgnore_IgnoresLocalEnvFiles()
+    {
+        var gitIgnorePath = Path.Combine(FindRepoRoot(), ".gitignore");
+        Assert.True(File.Exists(gitIgnorePath), $".gitignore tidak ditemukan: {gitIgnorePath}");
+
+        var content = File.ReadAllText(gitIgnorePath);
+        Assert.Matches(new Regex(@"(?m)^\.env\s*$"), content);
+        Assert.Matches(new Regex(@"(?m)^\.env\.\*\s*$"), content);
+    }
+
+    [Fact]
+    public void CiWorkflow_SmokeTest_VerifiesNonRootContainerAndBridgeIpHealthCheck()
+    {
+        var ciPath = Path.Combine(FindRepoRoot(), ".github", "workflows", "ci.yml");
+        Assert.True(File.Exists(ciPath), $"Workflow CI belum ada: {ciPath}");
+
+        var yaml = File.ReadAllText(ciPath);
+        Assert.Contains("id -u", yaml);
+        Assert.Contains("docker inspect", yaml);
+    }
 }
