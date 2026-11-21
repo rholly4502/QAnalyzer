@@ -60,3 +60,39 @@ jobs:
         run: |
           test -f src/QAnalyzer.Web/wwwroot/index.html
           test -d src/QAnalyzer.Web/wwwroot/assets
+
+  docker-build:
+    name: Docker Image Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t qanalyzer-web:ci .
+
+      - name: Smoke test container endpoints
+        run: |
+          set -euo pipefail
+          CID=$(docker run -d -p 127.0.0.1:18080:8080 qanalyzer-web:ci)
+          trap 'docker logs "$CID" || true; docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:18080/api/health | grep -q '"ok"'; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -sf http://127.0.0.1:18080/api/health | grep -q '"ok"'
+
+          curl -sf -X POST http://127.0.0.1:18080/api/analyze \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":"SELECT * FROM dbo.Orders;"}' | grep -q 'SELECT_STAR'
+
+          INDEX_HTML=$(curl -sf http://127.0.0.1:18080/analyzer/)
+          echo "$INDEX_HTML" | grep -q '<div id="root">'
+
+          ASSET_PATH=$(echo "$INDEX_HTML" | grep -oE '/analyzer/assets/index-[^"]+\.js' | head -n 1)
+          test -n "$ASSET_PATH"
+          curl -sf "http://127.0.0.1:18080${ASSET_PATH}" >/dev/null

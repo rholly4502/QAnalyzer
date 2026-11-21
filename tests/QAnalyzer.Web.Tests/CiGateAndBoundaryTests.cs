@@ -104,4 +104,39 @@ public class CiGateAndBoundaryTests
         Assert.Contains("./.github/workflows/ci.yml", yaml);
         Assert.Matches(new Regex(@"(?m)^\s*needs:\s*(\[\s*ci\s*\]|ci)\s*$"), yaml);
     }
+
+    [Fact]
+    public void Dockerfile_UsesConsistentMultiStagePathsForWebAndDotnet()
+    {
+        var dockerfilePath = Path.Combine(FindRepoRoot(), "Dockerfile");
+        Assert.True(File.Exists(dockerfilePath), $"Dockerfile tidak ditemukan: {dockerfilePath}");
+
+        var content = File.ReadAllText(dockerfilePath);
+
+        // Stage web harus bekerja di /build/web agar vite outDir ../src/QAnalyzer.Web/wwwroot -> /build/src/QAnalyzer.Web/wwwroot
+        Assert.Matches(new Regex(@"(?m)^\s*WORKDIR\s+/build/web\s*$"), content);
+
+        // Stage build berada di WORKDIR /src; COPY src/ src/ salah karena membuat /src/src/...
+        Assert.DoesNotMatch(new Regex(@"(?m)^\s*COPY\s+src/\s+src/\s*$"), content);
+        Assert.Contains("COPY src/QAnalyzer.Core/ QAnalyzer.Core/", content);
+        Assert.Contains("COPY src/QAnalyzer.Web/ QAnalyzer.Web/", content);
+
+        // Salinan wwwroot dari stage web harus masuk ke /src/QAnalyzer.Web/wwwroot, bukan ./src/QAnalyzer.Web/wwwroot
+        Assert.DoesNotMatch(new Regex(@"(?m)(?:^|\s)\./src/QAnalyzer\.Web/wwwroot(?:\s|$)"), content);
+        Assert.Contains("COPY --from=web /build/src/QAnalyzer.Web/wwwroot /src/QAnalyzer.Web/wwwroot", content);
+    }
+
+    [Fact]
+    public void CiWorkflow_DefinesDockerBuildAndSmokeTestGate()
+    {
+        var ciPath = Path.Combine(FindRepoRoot(), ".github", "workflows", "ci.yml");
+        Assert.True(File.Exists(ciPath), $"Workflow CI belum ada: {ciPath}");
+
+        var yaml = File.ReadAllText(ciPath);
+
+        Assert.Contains("docker build", yaml);
+        Assert.Contains("/api/health", yaml);
+        Assert.Contains("/api/analyze", yaml);
+        Assert.Contains("/analyzer/", yaml);
+    }
 }
