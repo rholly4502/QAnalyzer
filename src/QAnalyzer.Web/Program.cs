@@ -192,14 +192,21 @@ public partial class Program
 
         group.MapPost("/analyze", (AnalyzeRequest req, AnalyzerService svc, WebSecurityOptions opts) =>
         {
-            var failure = WebSecurityValidator.ValidateAnalyzeRequest(req, opts.MaxSqlLength);
+            var failure = WebSecurityValidator.ValidateAnalyzeRequest(req, opts.MaxSqlLength, opts.MaxPlanLength);
             if (failure is not null)
             {
                 return Results.Json(new { error = failure.Error }, statusCode: failure.StatusCode);
             }
 
-            var resp = svc.Analyze(req);
-            return Results.Ok(resp);
+            try
+            {
+                var resp = svc.Analyze(req);
+                return Results.Ok(resp);
+            }
+            catch (FormatException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         }).RequireRateLimiting("analyze");
 
         group.MapPost("/tune", async (
@@ -209,7 +216,7 @@ public partial class Program
             TuningGatewayOptions tuningOpts,
             CancellationToken ct) =>
         {
-            var failure = WebSecurityValidator.ValidateTuneRequest(req, opts.MaxSqlLength, opts.MaxSqlLength);
+            var failure = WebSecurityValidator.ValidateTuneRequest(req, opts.MaxSqlLength, opts.MaxPlanLength);
             if (failure is not null)
             {
                 return Results.Json(new { error = failure.Error }, statusCode: failure.StatusCode);

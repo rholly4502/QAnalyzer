@@ -101,6 +101,16 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"sql":"SELECT * FROM dbo.Orders;"}' | grep -q 'SELECT_STAR'
 
+          curl -sf -X POST http://127.0.0.1:18080/analyzer/api/analyze \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":"","sqlPlanXml":"<ShowPlanXML><RelOp NodeId=\"1\" PhysicalOp=\"Table Scan\" LogicalOp=\"Table Scan\"><TableScan><Object Schema=\"[dbo]\" Table=\"[Orders]\" /></TableScan></RelOp></ShowPlanXML>"}' \
+            | grep -q 'PLAN_TABLE_SCAN'
+
+          BAD_PLAN_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/analyzer/api/analyze \
+            -H 'Content-Type: application/json' \
+            -d '{"sql":"SELECT 1;","sqlPlanXml":"<ShowPlanXML><broken>"}')
+          test "$BAD_PLAN_STATUS" -eq 400
+
           EMPTY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/api/analyze \
             -H 'Content-Type: application/json' \
             -d '{"sql":""}')

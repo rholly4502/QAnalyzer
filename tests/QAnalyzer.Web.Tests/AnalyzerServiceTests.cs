@@ -1,3 +1,4 @@
+using QAnalyzer.Core;
 using QAnalyzer.Web.Services;
 
 namespace QAnalyzer.Web.Tests;
@@ -67,5 +68,129 @@ public class AnalyzerServiceTests
         Assert.NotNull(resp.TransformedSql);
         Assert.EndsWith("OPTION (MAXDOP 1)", resp.TransformedSql);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(resp.TransformedSql, @"OPTION\s*\(\s*MAXDOP\s+1\s*\)"));
+    }
+
+    [Fact]
+    public void Analyze_WithSqlAndExecutionPlan_CombinesStaticAndPlanDiagnostics()
+    {
+        const string planXml = """
+            <ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+              <BatchSequence>
+                <Batch>
+                  <Statements>
+                    <StmtSimple>
+                      <QueryPlan>
+                        <MissingIndexes>
+                          <MissingIndexGroup Impact="88.5">
+                            <MissingIndex Database="[Sales]" Schema="[dbo]" Table="[Orders]">
+                              <ColumnGroup Usage="EQUALITY">
+                                <Column Name="[CustomerId]" ColumnId="2" />
+                              </ColumnGroup>
+                            </MissingIndex>
+                          </MissingIndexGroup>
+                        </MissingIndexes>
+                        <RelOp NodeId="1" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+                          <TableScan>
+                            <Object Schema="[dbo]" Table="[AuditLog]" />
+                          </TableScan>
+                        </RelOp>
+                        <RelOp NodeId="2" PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek">
+                          <IndexScan Lookup="true" Ordered="true">
+                            <Object Schema="[dbo]" Table="[Orders]" Index="[PK_Orders]" />
+                          </IndexScan>
+                        </RelOp>
+                        <RelOp NodeId="3" PhysicalOp="Sort" LogicalOp="Sort">
+                          <Warnings>
+                            <SpillToTempDb SpillLevel="2" />
+                          </Warnings>
+                        </RelOp>
+                      </QueryPlan>
+                    </StmtSimple>
+                  </Statements>
+                </Batch>
+              </BatchSequence>
+            </ShowPlanXML>
+            """;
+
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "SELECT * FROM dbo.Orders;",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.HasExecutionPlan);
+        Assert.Equal(4, resp.PlanDiagnosticCount);
+        Assert.Equal(5, resp.Total);
+        Assert.True(resp.HasCritical);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == "SELECT_STAR");
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMissingIndex);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleKeyLookup);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleTableScan);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb);
+    }
+
+    [Fact]
+    public void Analyze_PlanOnlyWithoutSql_ParsesExecutionPlanAndSkipsMaxDopTransform()
+    {
+        const string planXml = """
+            <ShowPlanXML>
+              <RelOp NodeId="1" PhysicalOp="Table Scan" LogicalOp="Table Scan">
+                <TableScan>
+                  <Object Schema="[dbo]" Table="[Orders]" />
+                </TableScan>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "",
+            EnableMaxDopTransform = true,
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.HasExecutionPlan);
+        Assert.Equal(1, resp.PlanDiagnosticCount);
+        Assert.Equal(1, resp.Total);
+        Assert.Null(resp.TransformedSql);
+        var diag = Assert.Single(resp.Diagnostics);
+        Assert.Equal(ExecutionPlanParser.RuleTableScan, diag.RuleId);
+    }
+
+    [Fact]
+    public void Analyze_CleanExecutionPlan_SetsHasExecutionPlanTrueWithZeroPlanDiagnostics()
+    {
+        const string planXml = """
+            <ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+              <RelOp NodeId="1" PhysicalOp="Index Seek" LogicalOp="Index Seek">
+                <IndexScan Ordered="true">
+                  <Object Schema="[dbo]" Table="[Orders]" Index="[IX_Orders_Id]" />
+                </IndexScan>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.HasExecutionPlan);
+        Assert.Equal(0, resp.PlanDiagnosticCount);
+        Assert.Equal(0, resp.Total);
+        Assert.False(resp.HasCritical);
+    }
+
+    [Theory]
+    [InlineData("<ShowPlanXML><broken>")]
+    [InlineData("<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><ShowPlanXML>&xxe;</ShowPlanXML>")]
+    public void Analyze_MalformedOrDtdSqlPlanXml_ThrowsFormatException(string invalidXml)
+    {
+        Assert.Throws<FormatException>(() => _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = invalidXml,
+        }));
     }
 }

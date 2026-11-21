@@ -10,29 +10,37 @@ public sealed record ValidationFailure(int StatusCode, string Error);
 /// </summary>
 public static class WebSecurityValidator
 {
-    public static ValidationFailure? ValidateAnalyzeRequest(AnalyzeRequest? request, int maxSqlLength)
+    public static ValidationFailure? ValidateAnalyzeRequest(
+        AnalyzeRequest? request,
+        int maxSqlLength,
+        int? maxPlanLength = null)
     {
-        if (maxSqlLength <= 0)
+        var effectiveMaxPlanLength = maxPlanLength ?? maxSqlLength;
+        ValidateLimitArguments(maxSqlLength, effectiveMaxPlanLength);
+
+        var hasSql = request is not null && !string.IsNullOrWhiteSpace(request.Sql);
+        var hasPlan = request is not null && !string.IsNullOrWhiteSpace(request.SqlPlanXml);
+        if (!hasSql && !hasPlan)
         {
-            throw new ArgumentOutOfRangeException(nameof(maxSqlLength), "Batas panjang SQL harus lebih besar dari 0.");
+            return new ValidationFailure(StatusCodes.Status400BadRequest, "Sql atau XML execution plan wajib diisi.");
         }
+
+        return ValidatePayloadLengths(request!.Sql, request.SqlPlanXml, maxSqlLength, effectiveMaxPlanLength);
+    }
+
+    public static ValidationFailure? ValidateTuneRequest(TuneRequest? request, int maxSqlLength, int maxPlanLength)
+    {
+        ValidateLimitArguments(maxSqlLength, maxPlanLength);
 
         if (request is null || string.IsNullOrWhiteSpace(request.Sql))
         {
             return new ValidationFailure(StatusCodes.Status400BadRequest, "Sql wajib diisi.");
         }
 
-        if (request.Sql.Length > maxSqlLength)
-        {
-            return new ValidationFailure(
-                StatusCodes.Status413PayloadTooLarge,
-                $"Script SQL melebihi batas maksimal {maxSqlLength} karakter.");
-        }
-
-        return null;
+        return ValidatePayloadLengths(request.Sql, request.SqlPlanXml, maxSqlLength, maxPlanLength);
     }
 
-    public static ValidationFailure? ValidateTuneRequest(TuneRequest? request, int maxSqlLength, int maxPlanLength)
+    private static void ValidateLimitArguments(int maxSqlLength, int maxPlanLength)
     {
         if (maxSqlLength <= 0)
         {
@@ -43,20 +51,22 @@ public static class WebSecurityValidator
         {
             throw new ArgumentOutOfRangeException(nameof(maxPlanLength), "Batas panjang XML execution plan harus lebih besar dari 0.");
         }
+    }
 
-        if (request is null || string.IsNullOrWhiteSpace(request.Sql))
-        {
-            return new ValidationFailure(StatusCodes.Status400BadRequest, "Sql wajib diisi.");
-        }
-
-        if (request.Sql.Length > maxSqlLength)
+    private static ValidationFailure? ValidatePayloadLengths(
+        string? sql,
+        string? sqlPlanXml,
+        int maxSqlLength,
+        int maxPlanLength)
+    {
+        if (!string.IsNullOrEmpty(sql) && sql.Length > maxSqlLength)
         {
             return new ValidationFailure(
                 StatusCodes.Status413PayloadTooLarge,
                 $"Script SQL melebihi batas maksimal {maxSqlLength} karakter.");
         }
 
-        if (!string.IsNullOrEmpty(request.SqlPlanXml) && request.SqlPlanXml.Length > maxPlanLength)
+        if (!string.IsNullOrEmpty(sqlPlanXml) && sqlPlanXml.Length > maxPlanLength)
         {
             return new ValidationFailure(
                 StatusCodes.Status413PayloadTooLarge,

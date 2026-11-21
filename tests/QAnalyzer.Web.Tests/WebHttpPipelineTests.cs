@@ -106,6 +106,84 @@ public class WebHttpPipelineTests
         Assert.Contains(diagnostics.EnumerateArray(), d => d.GetProperty("ruleId").GetString() == "SELECT_STAR");
     }
 
+    [Fact]
+    public async Task AnalyzeEndpoint_WithSqlPlanXml_WorksOnRootAndSubpath_AndRejectsInvalidOrOversizedPlan()
+    {
+        const string planXml = "<ShowPlanXML><RelOp NodeId=\"1\" PhysicalOp=\"Table Scan\" LogicalOp=\"Table Scan\"><TableScan><Object Schema=\"[dbo]\" Table=\"[Orders]\" /></TableScan></RelOp></ShowPlanXML>";
+        var combinedPayload = JsonSerializer.Serialize(new
+        {
+            sql = "SELECT * FROM dbo.Orders;",
+            sqlPlanXml = planXml,
+        });
+
+        await using var host = await StartTestHostAsync();
+
+        foreach (var path in new[] { "/api/analyze", "/analyzer/api/analyze" })
+        {
+            using var body = new StringContent(combinedPayload, Encoding.UTF8, "application/json");
+            var response = await host.Client.PostAsync(path, body);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = await ReadJsonAsync(response);
+            Assert.True(json.RootElement.GetProperty("hasExecutionPlan").GetBoolean());
+            Assert.Equal(1, json.RootElement.GetProperty("planDiagnosticCount").GetInt32());
+            var diagnostics = json.RootElement.GetProperty("diagnostics").EnumerateArray().ToList();
+            Assert.Contains(diagnostics, d => d.GetProperty("ruleId").GetString() == "SELECT_STAR");
+            Assert.Contains(diagnostics, d => d.GetProperty("ruleId").GetString() == ExecutionPlanParser.RuleTableScan);
+        }
+
+        var planOnlyPayload = JsonSerializer.Serialize(new
+        {
+            sql = "",
+            sqlPlanXml = planXml,
+        });
+        using (var planOnlyBody = new StringContent(planOnlyPayload, Encoding.UTF8, "application/json"))
+        {
+            var planOnlyResp = await host.Client.PostAsync("/analyzer/api/analyze", planOnlyBody);
+            Assert.Equal(HttpStatusCode.OK, planOnlyResp.StatusCode);
+            using var planOnlyJson = await ReadJsonAsync(planOnlyResp);
+            Assert.True(planOnlyJson.RootElement.GetProperty("hasExecutionPlan").GetBoolean());
+            var diag = Assert.Single(planOnlyJson.RootElement.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal(ExecutionPlanParser.RuleTableScan, diag.GetProperty("ruleId").GetString());
+        }
+
+        foreach (var invalidXml in new[]
+        {
+            "<ShowPlanXML><broken>",
+            "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><ShowPlanXML>&xxe;</ShowPlanXML>",
+        })
+        {
+            var invalidPayload = JsonSerializer.Serialize(new
+            {
+                sql = "SELECT Id FROM dbo.Orders;",
+                sqlPlanXml = invalidXml,
+            });
+            using var badBody = new StringContent(invalidPayload, Encoding.UTF8, "application/json");
+            var badResp = await host.Client.PostAsync("/analyzer/api/analyze", badBody);
+            Assert.Equal(HttpStatusCode.BadRequest, badResp.StatusCode);
+            Assert.Equal("application/json", badResp.Content.Headers.ContentType?.MediaType);
+            using var err = await ReadJsonAsync(badResp);
+            Assert.False(string.IsNullOrWhiteSpace(err.RootElement.GetProperty("error").GetString()));
+        }
+
+        var limitConfig = new Dictionary<string, string?>
+        {
+            ["Security:MaxPlanLength"] = "64",
+        };
+        await using var limitedHost = await StartTestHostAsync(limitConfig);
+        var oversizedPayload = JsonSerializer.Serialize(new
+        {
+            sql = "SELECT 1;",
+            sqlPlanXml = "<ShowPlanXML>" + new string('A', 80) + "</ShowPlanXML>",
+        });
+        using var oversizedBody = new StringContent(oversizedPayload, Encoding.UTF8, "application/json");
+        var oversizedResp = await limitedHost.Client.PostAsync("/analyzer/api/analyze", oversizedBody);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversizedResp.StatusCode);
+        Assert.Equal("application/json", oversizedResp.Content.Headers.ContentType?.MediaType);
+        using var oversizedErr = await ReadJsonAsync(oversizedResp);
+        Assert.False(string.IsNullOrWhiteSpace(oversizedErr.RootElement.GetProperty("error").GetString()));
+    }
+
     [Theory]
     [InlineData("/api/tune")]
     [InlineData("/analyzer/api/tune")]

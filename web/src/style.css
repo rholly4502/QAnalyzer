@@ -28,7 +28,42 @@ label.opt { font-size: 13px; display: flex; align-items: center; gap: 6px; }
 .badge.Info { background: #0ea5e9; }
 .badge.Warning { background: #f59e0b; }
 .badge.Critical { background: #dc2626; }
+.badge.Plan { background: #0f766e; }
 .badge.total { background: #64748b; }
+
+.plan-section { margin-top: 12px; }
+.plan-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.plan-input { min-height: 110px; margin-top: 8px; font-size: 12px; }
+.plan-pill {
+  font-size: 12px; color: #0f766e; background: #f0fdfa; border: 1px solid #99f6e4;
+  border-radius: 999px; padding: 2px 10px;
+}
+
+.btn-secondary {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; border: 1px solid #cbd2d9; border-radius: 6px;
+  background: #f8fafc; color: #334155; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; background: #f8fafc; }
+.btn-link {
+  padding: 2px 6px; border: 0; background: transparent; color: #dc2626;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.file-btn { position: relative; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); border: 0;
+}
+
+.filter-row {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid #eef1f4;
+}
+.filter-label { font-size: 12px; font-weight: 600; color: #64748b; }
+.ml-auto { margin-left: auto; }
+.card-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.error-msg { color: #dc2626; margin-top: 10px; font-size: 13px; }
 
 .tablewrap { overflow-x: auto; margin-top: 10px; }
 table.diags { width: 100%; border-collapse: collapse; font-size: 13px; }
