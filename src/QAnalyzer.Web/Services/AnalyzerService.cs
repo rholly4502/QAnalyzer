@@ -33,6 +33,7 @@ public sealed class AnalyzerService
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),
+        new NonSargablePredicateRule(),
     ];
 
     public AnalyzeResponse Analyze(AnalyzeRequest request)
