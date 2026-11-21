@@ -54,4 +54,18 @@ public class AnalyzerServiceTests
         Assert.True(resp.HasCritical);
         Assert.Contains(resp.Diagnostics, d => d.Level == "Critical");
     }
+
+    [Fact]
+    public void Analyze_MaxDopEnabled_OnCteWithoutSemicolon_AppendsSingleOuterOption()
+    {
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "WITH cte AS (SELECT Id FROM (SELECT Id FROM Orders) s) SELECT Id FROM cte",
+            EnableMaxDopTransform = true
+        });
+
+        Assert.NotNull(resp.TransformedSql);
+        Assert.EndsWith("OPTION (MAXDOP 1)", resp.TransformedSql);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(resp.TransformedSql, @"OPTION\s*\(\s*MAXDOP\s+1\s*\)"));
+    }
 }
