@@ -193,4 +193,44 @@ public class AnalyzerServiceTests
             SqlPlanXml = invalidXml,
         }));
     }
+
+    [Fact]
+    public void Analyze_WithPlanWarnings_DetectsImplicitConvertNoJoinPredicateAndMissingStats()
+    {
+        const string planXml = """
+            <ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+              <RelOp NodeId="1" PhysicalOp="Nested Loops" LogicalOp="Inner Join">
+                <Warnings NoJoinPredicate="true">
+                  <PlanAffectingConvert ConvertIssue="Seek Plan" Expression="CONVERT_IMPLICIT(nvarchar(20),[dbo].[Orders].[Code],0)" />
+                  <ColumnsWithNoStatistics>
+                    <ColumnReference Schema="[dbo]" Table="[Orders]" Column="[Status]" />
+                  </ColumnsWithNoStatistics>
+                </Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.HasExecutionPlan);
+        Assert.Equal(3, resp.PlanDiagnosticCount);
+        Assert.True(resp.HasCritical);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleImplicitConvert);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleNoJoinPredicate && d.Level == "Critical");
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMissingStatistics);
+    }
+
+    [Fact]
+    public void Analyze_NonShowPlanXmlRoot_ThrowsFormatException()
+    {
+        Assert.Throws<FormatException>(() => _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = "<root><item /></root>",
+        }));
+    }
 }

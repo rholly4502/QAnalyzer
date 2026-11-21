@@ -190,4 +190,45 @@ public class TuningServiceTests
         Assert.Equal("HTTP 502: Upstream error", resp.Error);
         Assert.True(resp.HasCritical);
     }
+
+    [Fact]
+    public async Task TuneAsync_ForwardsNewPlanWarningsAndRejectsNonShowPlanXml()
+    {
+        var client = new CapturingAdvisorClient(new TuningResponse(true, "Perbaiki join dan statistik.", null));
+        var service = new TuningService(client);
+
+        const string planXml = """
+            <ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan">
+              <RelOp NodeId="1" PhysicalOp="Nested Loops" LogicalOp="Inner Join">
+                <Warnings NoJoinPredicate="true">
+                  <PlanAffectingConvert ConvertIssue="Seek Plan" Expression="CONVERT_IMPLICIT(nvarchar(20),[dbo].[Orders].[Code],0)" />
+                  <ColumnsWithNoStatistics>
+                    <ColumnReference Schema="[dbo]" Table="[Orders]" Column="[Status]" />
+                  </ColumnsWithNoStatistics>
+                </Warnings>
+              </RelOp>
+            </ShowPlanXML>
+            """;
+
+        var resp = await service.TuneAsync(new TuneRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = planXml,
+        });
+
+        Assert.True(resp.Success);
+        Assert.True(resp.HasCritical);
+        Assert.NotNull(client.LastRequest);
+        Assert.Empty(client.LastRequest.MissingIndexes);
+        Assert.Null(client.LastRequest.CachedStat);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleImplicitConvert);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleNoJoinPredicate);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMissingStatistics);
+
+        await Assert.ThrowsAsync<FormatException>(() => service.TuneAsync(new TuneRequest
+        {
+            Sql = "SELECT Id FROM dbo.Orders;",
+            SqlPlanXml = "<root><item /></root>",
+        }));
+    }
 }
