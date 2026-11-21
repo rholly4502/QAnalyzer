@@ -10,6 +10,9 @@ laporan/
 appsettings.json
 appsettings.Development.json
 tuning/
+.env
+.env.*
+!.env.example
 
 # frontend
 node_modules/
