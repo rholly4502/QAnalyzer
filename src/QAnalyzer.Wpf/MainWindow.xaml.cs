@@ -6,22 +6,12 @@ using System.Text;
 using System.Windows;
 using Microsoft.Win32;
 using QAnalyzer.Core;
-using QAnalyzer.Core.Rules;
 
 namespace QAnalyzer.Wpf;
 
 public partial class MainWindow : Window
 {
-    private static readonly ISqlRule[] DefaultRules =
-    [
-        new SqlSyntaxErrorRule(),
-        new SelectStarRule(),
-        new NoLockRule(),
-        new UpdateWithoutWhereRule(),
-        new DeleteWithoutWhereRule(),
-        new TruncateTableRule(),
-        new NonSargablePredicateRule(),
-    ];
+    private static readonly IReadOnlyList<ISqlRule> DefaultRules = SqlAnalyzer.CreateDefaultRules();
 
     private readonly ObservableCollection<Diagnostic> _diagnostics = [];
     private readonly List<Diagnostic> _allDiagnostics = [];

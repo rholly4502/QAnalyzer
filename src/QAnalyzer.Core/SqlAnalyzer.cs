@@ -1,4 +1,5 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using QAnalyzer.Core.Rules;
 
 namespace QAnalyzer.Core;
 
@@ -10,6 +11,18 @@ public sealed class SqlAnalyzer
 {
     private readonly IReadOnlyList<ISqlRule> _rules;
     private readonly AnalyzerSettings? _settings;
+
+    public static IReadOnlyList<ISqlRule> CreateDefaultRules() =>
+    [
+        new SqlSyntaxErrorRule(),
+        new SelectStarRule(),
+        new NoLockRule(),
+        new UpdateWithoutWhereRule(),
+        new DeleteWithoutWhereRule(),
+        new TruncateTableRule(),
+        new NonSargablePredicateRule(),
+        new DynamicSqlRule(),
+    ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
     {

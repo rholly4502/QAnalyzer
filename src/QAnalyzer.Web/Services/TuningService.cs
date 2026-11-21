@@ -1,7 +1,6 @@
 using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using QAnalyzer.Core;
-using QAnalyzer.Core.Rules;
 
 namespace QAnalyzer.Web.Services;
 
@@ -129,16 +128,7 @@ public sealed class HermesTuningAdvisorClient(HttpClient httpClient, TuningGatew
 /// </summary>
 public sealed class TuningService(ITuningAdvisorClient advisorClient)
 {
-    private static readonly ISqlRule[] DefaultRules =
-    [
-        new SqlSyntaxErrorRule(),
-        new SelectStarRule(),
-        new NoLockRule(),
-        new UpdateWithoutWhereRule(),
-        new DeleteWithoutWhereRule(),
-        new TruncateTableRule(),
-        new NonSargablePredicateRule(),
-    ];
+    private static readonly IReadOnlyList<ISqlRule> DefaultRules = SqlAnalyzer.CreateDefaultRules();
 
     private readonly ITuningAdvisorClient _advisorClient = advisorClient ?? throw new ArgumentNullException(nameof(advisorClient));
     private readonly ExecutionPlanParser _planParser = new();
