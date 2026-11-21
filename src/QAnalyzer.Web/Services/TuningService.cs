@@ -131,6 +131,7 @@ public sealed class TuningService(ITuningAdvisorClient advisorClient)
 {
     private static readonly ISqlRule[] DefaultRules =
     [
+        new SqlSyntaxErrorRule(),
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),

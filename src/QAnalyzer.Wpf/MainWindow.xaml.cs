@@ -14,6 +14,7 @@ public partial class MainWindow : Window
 {
     private static readonly ISqlRule[] DefaultRules =
     [
+        new SqlSyntaxErrorRule(),
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),

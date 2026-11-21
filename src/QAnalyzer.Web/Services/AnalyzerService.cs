@@ -33,6 +33,7 @@ public sealed class AnalyzerService
 {
     private static readonly ISqlRule[] DefaultRules =
     [
+        new SqlSyntaxErrorRule(),
         new SelectStarRule(),
         new NoLockRule(),
         new UpdateWithoutWhereRule(),

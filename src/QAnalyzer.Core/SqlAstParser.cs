@@ -12,6 +12,15 @@ internal interface IAstSqlRule : ISqlRule
 }
 
 /// <summary>
+/// Kontrak internal untuk rule yang mengevaluasi daftar <see cref="ParseError"/> ScriptDom
+/// agar satu script tetap hanya di-parse sekali per panggilan <see cref="SqlAnalyzer.Analyze"/>.
+/// </summary>
+internal interface IAstParseErrorRule : ISqlRule
+{
+    IEnumerable<Diagnostic> Evaluate(IReadOnlyList<ParseError> errors);
+}
+
+/// <summary>
 /// Helper internal pembungkus <see cref="TSql170Parser"/> agar tipe ScriptDom
 /// tidak bocor ke API publik <c>QAnalyzer.Core</c>.
 /// </summary>
