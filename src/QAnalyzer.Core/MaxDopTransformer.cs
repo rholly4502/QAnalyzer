@@ -1,37 +1,119 @@
-using System.Text.RegularExpressions;
+using System.Text;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace QAnalyzer.Core;
 
 /// <summary>
-/// Menghasilkan versi "hemat resource" query: menambahkan `OPTION (MAXDOP 1)`
-/// di akhir tiap SELECT terluar. Aman: tidak menyentuh query yang sudah punya
-/// klausa OPTION; hanya satu OPTION yang diperbolehkan dan harus di paling akhir.
+/// Menghasilkan versi "hemat resource" query via AST ScriptDom: menambahkan
+/// `OPTION (MAXDOP 1)` di akhir tiap statement SELECT terluar yang belum memiliki
+/// klausa OPTION. Aman terhadap komentar, string literal, CTE, subquery,
+/// UNION, serta konteks DDL/cursor/inline-TVF di mana OPTION tidak valid.
 /// </summary>
 public static class MaxDopTransformer
 {
+    private const string MaxDopOptionClause = " OPTION (MAXDOP 1)";
+
     public static string AddMaxDopOne(string sql)
     {
-        if (string.IsNullOrWhiteSpace(sql)) return sql;
-
-        // Bagi menjadi statement berdasar titik koma (pendekatan sederhana).
-        // Skip jika ada OPTION existing di statement yang sama.
-        var statementPattern = new Regex(
-            @"(?<before>.*?)(?<stmt>\bSELECT\b.*?)(?<end>;|(?=\s*\bSELECT\b))",
-            RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-        var result = statementPattern.Replace(sql, m =>
+        if (string.IsNullOrWhiteSpace(sql))
         {
-            var stmt = m.Groups["stmt"].Value;
-            if (Regex.IsMatch(stmt, @"\bOPTION\s*\(", RegexOptions.IgnoreCase))
-                return m.Value; // sudah ada OPTION — jangan sentuh
-            var trimmed = stmt.TrimEnd();
-            var injection = trimmed.EndsWith(")", StringComparison.Ordinal) ||
-                            trimmed.EndsWith("]", StringComparison.Ordinal) ||
-                            trimmed.EndsWith("'", StringComparison.Ordinal)
-                ? " OPTION (MAXDOP 1)" : " OPTION (MAXDOP 1)";
-            return m.Groups["before"].Value + stmt + injection + m.Groups["end"].Value;
-        });
+            return sql;
+        }
 
-        return result;
+        var fragment = SqlAstParser.Parse(sql, out var errors);
+        if (fragment is null || errors.Count > 0)
+        {
+            return sql;
+        }
+
+        var visitor = new OuterSelectVisitor(sql.Length);
+        fragment.Accept(visitor);
+
+        if (visitor.InsertionOffsets.Count == 0)
+        {
+            return sql;
+        }
+
+        var offsets = visitor.InsertionOffsets;
+        offsets.Sort();
+
+        var sb = new StringBuilder(sql.Length + offsets.Count * MaxDopOptionClause.Length);
+        var cursor = 0;
+        var lastInsertedOffset = -1;
+
+        foreach (var offset in offsets)
+        {
+            if (offset == lastInsertedOffset || offset < cursor || offset > sql.Length)
+            {
+                continue;
+            }
+
+            sb.Append(sql, cursor, offset - cursor);
+            sb.Append(MaxDopOptionClause);
+            cursor = offset;
+            lastInsertedOffset = offset;
+        }
+
+        if (cursor < sql.Length)
+        {
+            sb.Append(sql, cursor, sql.Length - cursor);
+        }
+
+        return sb.ToString();
+    }
+
+    private sealed class OuterSelectVisitor(int sqlLength) : TSqlFragmentVisitor
+    {
+        public List<int> InsertionOffsets { get; } = [];
+
+        // Konteks non-standalone di mana klausa OPTION (...) tidak valid atau dilarang T-SQL:
+        public override void ExplicitVisit(CreateViewStatement node) { }
+
+        public override void ExplicitVisit(AlterViewStatement node) { }
+
+        public override void ExplicitVisit(CreateOrAlterViewStatement node) { }
+
+        public override void ExplicitVisit(SelectFunctionReturnType node) { }
+
+        public override void ExplicitVisit(CursorDefinition node) { }
+
+        public override void ExplicitVisit(CreateTableStatement node) { }
+
+        public override void ExplicitVisit(CreateExternalTableStatement node) { }
+
+        public override void ExplicitVisit(SelectStatement node)
+        {
+            // Hanya sentuh SelectStatement terluar; subquery & CTE di dalamnya tidak perlu ditelusuri.
+            if (node.OptimizerHints.Count > 0)
+            {
+                return;
+            }
+
+            var tokens = node.ScriptTokenStream;
+            if (tokens is null || node.FirstTokenIndex < 0 || node.LastTokenIndex >= tokens.Count)
+            {
+                return;
+            }
+
+            for (var i = node.LastTokenIndex; i >= node.FirstTokenIndex; i--)
+            {
+                var token = tokens[i];
+                if (token.TokenType is TSqlTokenType.Semicolon
+                    or TSqlTokenType.WhiteSpace
+                    or TSqlTokenType.SingleLineComment
+                    or TSqlTokenType.MultilineComment)
+                {
+                    continue;
+                }
+
+                var endOffset = token.Offset + (token.Text?.Length ?? 0);
+                if (endOffset >= 0 && endOffset <= sqlLength)
+                {
+                    InsertionOffsets.Add(endOffset);
+                }
+
+                break;
+            }
+        }
     }
 }

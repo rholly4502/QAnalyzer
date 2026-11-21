@@ -17,18 +17,20 @@ internal interface IAstSqlRule : ISqlRule
 /// </summary>
 internal static class SqlAstParser
 {
-    public static TSqlFragment? Parse(string sql)
+    public static TSqlFragment? Parse(string sql) => Parse(sql, out _);
+
+    public static TSqlFragment? Parse(string sql, out IList<ParseError> errors)
     {
         ArgumentNullException.ThrowIfNull(sql);
         if (string.IsNullOrWhiteSpace(sql))
         {
+            errors = [];
             return null;
         }
 
         var parser = new TSql170Parser(initialQuotedIdentifiers: true);
         using var reader = new StringReader(sql);
-        var fragment = parser.Parse(reader, out _);
-        return fragment;
+        return parser.Parse(reader, out errors);
     }
 
     public static IEnumerable<QuerySpecification> GetDirectQuerySpecifications(QueryExpression? expression)
