@@ -6,7 +6,7 @@ namespace QAnalyzer.Core;
 public sealed record AnalyzerSettings
 {
     /// <summary>Peta rule-id -> severity override (kosong = pakai default rule).</summary>
-    public Dictionary<string, RiskLevel> RuleSeverityOverrides { get; init; } = new();
+    public Dictionary<string, RiskLevel> RuleSeverityOverrides { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Aktifkan transform "hemat resource" (OPTION MAXDOP 1).</summary>
     public bool EnableMaxDopTransform { get; init; } = false;
@@ -29,10 +29,58 @@ public static class RuleLevel
 {
     public static RiskLevel Resolve(RiskLevel defaultLevel, AnalyzerSettings? settings, string ruleId)
     {
-        if (settings is null) return defaultLevel;
-        if (settings.RuleSeverityOverrides.TryGetValue(ruleId, out var overridden)) return overridden;
-        if (settings.Profile == AnalysisProfile.Reporting &&
-            (ruleId == "NOLOCK" || ruleId == "SELECT_STAR")) return RiskLevel.Info;
+        if (settings is null || string.IsNullOrWhiteSpace(ruleId))
+        {
+            return defaultLevel;
+        }
+
+        if (TryGetOverride(settings.RuleSeverityOverrides, ruleId, out var overridden))
+        {
+            return overridden;
+        }
+
+        // Di profile Reporting hanya turunkan temuan read/non-critical; temuan Critical (mis. NOLOCK pada statement tulis) tetap Critical.
+        if (settings.Profile == AnalysisProfile.Reporting
+            && defaultLevel != RiskLevel.Critical
+            && (string.Equals(ruleId, "NOLOCK", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ruleId, "SELECT_STAR", StringComparison.OrdinalIgnoreCase)))
+        {
+            return RiskLevel.Info;
+        }
+
         return defaultLevel;
+    }
+
+    private static bool TryGetOverride(
+        IReadOnlyDictionary<string, RiskLevel>? overrides,
+        string ruleId,
+        out RiskLevel overridden)
+    {
+        if (overrides is null || overrides.Count == 0)
+        {
+            overridden = default;
+            return false;
+        }
+
+        if (overrides.TryGetValue(ruleId, out overridden))
+        {
+            return Enum.IsDefined(overridden);
+        }
+
+        foreach (var kv in overrides)
+        {
+            if (string.Equals(kv.Key, ruleId, StringComparison.OrdinalIgnoreCase))
+            {
+                if (Enum.IsDefined(kv.Value))
+                {
+                    overridden = kv.Value;
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        return false;
     }
 }

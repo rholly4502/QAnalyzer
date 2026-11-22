@@ -306,4 +306,18 @@ public class AnalyzerServiceTests
         Assert.True(resp.HasCritical);
         Assert.Contains(resp.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE" && d.Level == "Critical");
     }
+
+    [Fact]
+    public void Analyze_ReportingProfile_PreservesCriticalNoLockOnWriteStatements()
+    {
+        var resp = _service.Analyze(new AnalyzeRequest
+        {
+            Sql = "UPDATE dbo.Orders WITH (NOLOCK) SET Status = 'X' WHERE Id = 1;",
+            Profile = "reporting",
+        });
+
+        Assert.True(resp.HasCritical);
+        var nolock = Assert.Single(resp.Diagnostics, d => d.RuleId == "NOLOCK");
+        Assert.Equal("Critical", nolock.Level);
+    }
 }

@@ -64,12 +64,43 @@ public sealed class SqlRulesTests
         var analyzer = new SqlAnalyzer(new ISqlRule[]
         {
             new SelectStarRule(), new NoLockRule(), new UpdateWithoutWhereRule(),
-        });
+        }, settings);
 
         var report = analyzer.Analyze("UPDATE dbo.T WITH (NOLOCK) SET a=1;");
         // NoLock di update -> Critical (override profile tidak menyentuh UPDATE)
         // Update tanpa WHERE -> Critical
         Assert.Equal(2, report.Total);
         Assert.True(report.HasCritical);
+        Assert.All(report.Diagnostics, d => Assert.Equal(RiskLevel.Critical, d.Level));
+    }
+
+    [Fact]
+    public void Analyzer_ReportingProfile_PreservesCriticalNoLockOnWriteStatementsWithWhere()
+    {
+        var settings = new AnalyzerSettings { Profile = AnalysisProfile.Reporting };
+        var analyzer = new SqlAnalyzer(SqlAnalyzer.CreateDefaultRules(), settings);
+
+        var writeQueries = new[]
+        {
+            "UPDATE dbo.T WITH (NOLOCK) SET a = 1 WHERE Id = 1;",
+            "DELETE FROM dbo.T WITH (NOLOCK) WHERE Id = 1;",
+            "INSERT INTO dbo.Audit (Id) SELECT Id FROM dbo.T WITH (NOLOCK);",
+            "MERGE dbo.Target AS t USING dbo.Source AS s WITH (NOLOCK) ON t.Id = s.Id WHEN MATCHED THEN UPDATE SET t.Val = s.Val;",
+        };
+
+        foreach (var sql in writeQueries)
+        {
+            var report = analyzer.Analyze(sql);
+            Assert.True(report.HasCritical, $"Expected Critical diagnostic for: {sql}");
+            var nolock = Assert.Single(report.Diagnostics, d => d.RuleId == "NOLOCK");
+            Assert.Equal(RiskLevel.Critical, nolock.Level);
+        }
+
+        var readReport = analyzer.Analyze("SELECT * FROM dbo.T WITH (NOLOCK);");
+        Assert.False(readReport.HasCritical);
+        var selectStar = Assert.Single(readReport.Diagnostics, d => d.RuleId == "SELECT_STAR");
+        var readNoLock = Assert.Single(readReport.Diagnostics, d => d.RuleId == "NOLOCK");
+        Assert.Equal(RiskLevel.Info, selectStar.Level);
+        Assert.Equal(RiskLevel.Info, readNoLock.Level);
     }
 }

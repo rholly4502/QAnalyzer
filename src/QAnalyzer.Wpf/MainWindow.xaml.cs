@@ -34,9 +34,7 @@ public partial class MainWindow : Window
         var scanned = _scanner.ScanForDirectory(dir ?? string.Empty);
         if (scanned is not null)
         {
-            _settings = scanned.Settings;
-            if (scanned.Settings.Profile == AnalysisProfile.Reporting)
-                ProfileCombo.SelectedIndex = 1;
+            ApplySettings(scanned.Settings);
             if (!string.IsNullOrWhiteSpace(scanned.ConnectionString))
                 _metadataReader = new SqlDmvReader(scanned.ConnectionString);
             StatusText.Text = "appsettings.json terbaca.";
@@ -45,8 +43,17 @@ public partial class MainWindow : Window
         UpdateDashboard();
     }
 
+    private void ApplySettings(AnalyzerSettings settings)
+    {
+        _settings = settings;
+        ProfileCombo.SelectedIndex = settings.Profile == AnalysisProfile.Reporting ? 1 : 0;
+        MaxDopCheck.IsChecked = settings.EnableMaxDopTransform;
+        _analyzer = new SqlAnalyzer(DefaultRules, _settings);
+    }
+
     private void OnProfileChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        if (ProfileCombo is null) return;
         var profile = ProfileCombo.SelectedIndex == 1 ? AnalysisProfile.Reporting : AnalysisProfile.General;
         _settings = _settings with { Profile = profile };
         _analyzer = new SqlAnalyzer(DefaultRules, _settings);
@@ -69,8 +76,7 @@ public partial class MainWindow : Window
             var scanned = _scanner.ScanForDirectory(Path.GetDirectoryName(dlg.FileName) ?? string.Empty);
             if (scanned is not null)
             {
-                _settings = scanned.Settings;
-                if (_settings.Profile == AnalysisProfile.Reporting) ProfileCombo.SelectedIndex = 1;
+                ApplySettings(scanned.Settings);
                 if (!string.IsNullOrWhiteSpace(scanned.ConnectionString))
                 {
                     _metadataReader?.Dispose();
@@ -212,7 +218,14 @@ public partial class MainWindow : Window
                 var plan = await _metadataReader.GetExecutionPlanXmlAsync(sql);
                 if (plan is not null && !string.IsNullOrWhiteSpace(plan.PlanXml))
                 {
-                    try { combinedDiagnostics.AddRange(_planParser.Parse(plan.PlanXml)); }
+                    try
+                    {
+                        foreach (var d in _planParser.Parse(plan.PlanXml))
+                        {
+                            var resolved = RuleLevel.Resolve(d.Level, _settings, d.RuleId);
+                            combinedDiagnostics.Add(resolved == d.Level ? d : d with { Level = resolved });
+                        }
+                    }
                     catch (FormatException) { /* Abaikan XML plan korup agar tuning tetap berjalan. */ }
                 }
             }
