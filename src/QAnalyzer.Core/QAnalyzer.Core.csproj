@@ -11,4 +11,8 @@
     <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.191.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="QAnalyzer.Core.Tests" />
+  </ItemGroup>
+
 </Project>

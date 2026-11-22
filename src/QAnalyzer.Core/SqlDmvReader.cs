@@ -1,3 +1,5 @@
+using System.Data;
+using System.Text;
 using Microsoft.Data.SqlClient;
 
 namespace QAnalyzer.Core;
@@ -8,7 +10,12 @@ namespace QAnalyzer.Core;
 /// </summary>
 public sealed class SqlDmvReader : ISqlMetadataReader
 {
-    private const int DefaultCommandTimeoutSeconds = 15;
+    internal const int DefaultCommandTimeoutSeconds = 15;
+    public const int MaxTopQueryStats = 1000;
+    internal const int MaxIndexUsageRows = 500;
+    internal const int MaxMissingIndexRows = 100;
+    internal const int MaxSqlIdentifierLength = 128;
+    internal const string HeapIndexPlaceholder = "(HEAP)";
 
     internal const string CachedPlanQuerySql = @"
 SELECT TOP 1
@@ -19,10 +26,91 @@ CROSS APPLY sys.dm_exec_text_query_plan(
     qs.plan_handle,
     qs.statement_start_offset,
     qs.statement_end_offset) tqp
-WHERE st.text LIKE @pattern ESCAPE '\'
+WHERE st.text IS NOT NULL
+  AND st.text LIKE @pattern ESCAPE '\'
   AND tqp.query_plan IS NOT NULL
   AND st.text NOT LIKE '%sys.dm_exec_text_query_plan%'
 ORDER BY qs.total_elapsed_time DESC;";
+
+    internal const string TopQueryStatsSql = @"
+SELECT TOP (@top)
+    SUBSTRING(
+        st.text,
+        (qs.statement_start_offset / 2) + 1,
+        CASE
+            WHEN qs.statement_end_offset = -1 OR qs.statement_end_offset < qs.statement_start_offset
+                THEN (DATALENGTH(st.text) / 2) + 1
+            ELSE ((qs.statement_end_offset - qs.statement_start_offset) / 2) + 1
+        END
+    ) AS sql_text,
+    qs.execution_count,
+    qs.total_worker_time / 1000 AS worker_ms,
+    qs.total_elapsed_time / 1000 AS elapsed_ms,
+    qs.total_logical_reads
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+WHERE st.text IS NOT NULL
+  AND st.text NOT LIKE '%sys.dm_exec_query_stats%'
+ORDER BY qs.total_elapsed_time DESC;";
+
+    internal const string StatsForSqlQuerySql = @"
+SELECT TOP 1
+    SUBSTRING(
+        st.text,
+        (qs.statement_start_offset / 2) + 1,
+        CASE
+            WHEN qs.statement_end_offset = -1 OR qs.statement_end_offset < qs.statement_start_offset
+                THEN (DATALENGTH(st.text) / 2) + 1
+            ELSE ((qs.statement_end_offset - qs.statement_start_offset) / 2) + 1
+        END
+    ) AS sql_text,
+    qs.execution_count,
+    qs.total_elapsed_time / 1000 AS elapsed_ms,
+    qs.total_worker_time / 1000 AS worker_ms,
+    qs.total_logical_reads,
+    DATEDIFF(MINUTE, qs.creation_time, GETDATE()) AS plan_age_minutes
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+WHERE st.text IS NOT NULL
+  AND st.text LIKE @pattern ESCAPE '\'
+  AND st.text NOT LIKE '%sys.dm_exec_query_stats%'
+ORDER BY qs.total_elapsed_time DESC;";
+
+    internal const string MissingIndexesQuerySql = @"
+SELECT TOP (@top)
+    DB_NAME(d.database_id) AS [db],
+    OBJECT_SCHEMA_NAME(d.object_id, d.database_id) AS [schema],
+    OBJECT_NAME(d.object_id, d.database_id) AS [table],
+    MAX(d.equality_columns) AS equality_columns,
+    MAX(d.inequality_columns) AS inequality_columns,
+    MAX(d.included_columns) AS included_columns,
+    SUM(gs.user_seeks) AS user_seeks,
+    SUM(gs.user_scans) AS user_scans,
+    COALESCE(MAX(CAST(gs.avg_user_impact AS bigint)), 0) AS avg_user_impact
+FROM sys.dm_db_missing_index_details d
+JOIN sys.dm_db_missing_index_groups g ON g.index_handle = d.index_handle
+JOIN sys.dm_db_missing_index_group_stats gs ON gs.group_handle = g.index_group_handle
+WHERE d.database_id = CASE WHEN @db IS NULL THEN DB_ID() ELSE DB_ID(@db) END
+  AND DB_NAME(d.database_id) IS NOT NULL
+  AND OBJECT_SCHEMA_NAME(d.object_id, d.database_id) IS NOT NULL
+  AND OBJECT_NAME(d.object_id, d.database_id) IS NOT NULL
+GROUP BY d.database_id, d.object_id
+ORDER BY SUM(gs.user_seeks) + SUM(gs.user_scans) DESC;";
+
+    internal const string IndexUsageBaseSql = @"
+SELECT TOP (@top)
+    OBJECT_SCHEMA_NAME(ius.object_id) AS [schema],
+    OBJECT_NAME(ius.object_id) AS [table],
+    COALESCE(i.name, N'(HEAP)') AS [index],
+    ius.user_seeks,
+    ius.user_scans,
+    ius.user_lookups,
+    ius.user_updates
+FROM sys.dm_db_index_usage_stats ius
+JOIN sys.indexes i ON i.object_id = ius.object_id AND i.index_id = ius.index_id
+WHERE ius.database_id = DB_ID()
+  AND OBJECT_SCHEMA_NAME(ius.object_id) IS NOT NULL
+  AND OBJECT_NAME(ius.object_id) IS NOT NULL";
 
     internal const string ShowPlanOnSql = "SET SHOWPLAN_XML ON;";
     internal const string ShowPlanOffSql = "SET SHOWPLAN_XML OFF;";
@@ -31,10 +119,11 @@ ORDER BY qs.total_elapsed_time DESC;";
 
     public SqlDmvReader(string connectionString)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         _conn = new SqlConnection(connectionString);
     }
 
-    public bool IsConnected => _conn.State == System.Data.ConnectionState.Open;
+    public bool IsConnected => _conn.State == ConnectionState.Open;
 
     public void Open() => _conn.Open();
 
@@ -42,87 +131,48 @@ ORDER BY qs.total_elapsed_time DESC;";
 
     public IReadOnlyList<QueryExecutionStat> GetTopQueryStats(int top)
     {
-        const string sql = @"
-SELECT TOP (@top)
-    SUBSTRING(st.text, (qs.statement_start_offset/2)+1,
-        ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text)
-          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2)+1) AS sql_text,
-    qs.execution_count,
-    qs.total_worker_time/1000 AS worker_ms,
-    qs.total_elapsed_time/1000 AS elapsed_ms,
-    qs.total_logical_reads
-FROM sys.dm_exec_query_stats qs
-CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
-ORDER BY qs.total_elapsed_time DESC;";
-        var list = new List<QueryExecutionStat>();
-        using var cmd = new SqlCommand(sql, _conn);
-        cmd.Parameters.AddWithValue("@top", top);
+        using var cmd = CreateTopQueryStatsCommand(_conn, top);
         using var r = cmd.ExecuteReader();
+        var list = new List<QueryExecutionStat>();
         while (r.Read())
-            list.Add(new QueryExecutionStat(
-                r.GetString(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3), r.GetInt64(4)));
+        {
+            list.Add(MapQueryExecutionStat(r));
+        }
         return list;
     }
 
     public IReadOnlyList<IndexUsage> GetIndexUsage(string? schema = null, string? table = null)
     {
-        var sql = @"
-SELECT OBJECT_SCHEMA_NAME(ius.object_id) AS [schema],
-       OBJECT_NAME(ius.object_id) AS [table],
-       i.name AS [index],
-       ius.user_seeks, ius.user_scans, ius.user_lookups, ius.user_updates
-FROM sys.dm_db_index_usage_stats ius
-JOIN sys.indexes i ON i.object_id = ius.object_id AND i.index_id = ius.index_id
-WHERE ius.database_id = DB_ID()";
-        if (!string.IsNullOrWhiteSpace(schema) || !string.IsNullOrWhiteSpace(table))
-            sql += " AND OBJECT_SCHEMA_NAME(ius.object_id) LIKE @schema AND OBJECT_NAME(ius.object_id) LIKE @table";
-        var list = new List<IndexUsage>();
-        using var cmd = new SqlCommand(sql, _conn);
-        cmd.Parameters.AddWithValue("@schema", schema ?? "%");
-        cmd.Parameters.AddWithValue("@table", table ?? "%");
+        using var cmd = CreateIndexUsageCommand(_conn, schema, table);
+        if (cmd is null)
+        {
+            return [];
+        }
+
         using var r = cmd.ExecuteReader();
+        var list = new List<IndexUsage>();
         while (r.Read())
-            list.Add(new IndexUsage(r.GetString(0), r.GetString(1), r.GetString(2),
-                r.GetInt64(3), r.GetInt64(4), r.GetInt64(5), r.GetInt64(6)));
+        {
+            list.Add(MapIndexUsage(r));
+        }
         return list;
     }
 
-
     /// <summary>
     /// Mencari statistik historis untuk query yang cocok (parameterized/plan cache)
-    /// tanpa mengeksekusi. Cocokkan via hashing teks biasa + cari di plan cache.
+    /// tanpa mengeksekusi. Cocokkan via normalisasi literal aman + cari di plan cache.
     /// </summary>
     public CachedQueryStat? GetStatsForSql(string sqlText)
     {
-        // parameterisasi sederhana: hapus literal string/angka supaya bisa cocok
-        // dgn plan yang sudah di-parameterize oleh server.
-        var normalized = System.Text.RegularExpressions.Regex.Replace(
-            sqlText, @"'[^']*'|\b\d+\b", "?") .Trim();
-        const string sql = @"
-SELECT TOP 1
-    SUBSTRING(st.text, (qs.statement_start_offset/2)+1,
-        ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text)
-          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2)+1) AS sql_text,
-    qs.execution_count,
-    qs.total_elapsed_time/1000,
-    qs.total_worker_time/1000,
-    qs.total_logical_reads,
-    DATEDIFF(MINUTE, cp.creation_time, GETDATE())
-FROM sys.dm_exec_query_stats qs
-JOIN sys.dm_exec_cached_plans cp ON cp.plan_handle = qs.plan_handle
-CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
-WHERE st.text LIKE @pattern
-ORDER BY qs.total_elapsed_time DESC;
-";
-        using var cmd = new SqlCommand(sql, _conn);
-        cmd.Parameters.AddWithValue("@pattern", "%" + normalized.Substring(0, Math.Min(300, normalized.Length)) + "%");
-        using var r = cmd.ExecuteReader();
-        if (!r.Read()) return null;
-        return new CachedQueryStat(
-            r.GetString(0), r.GetInt64(1), r.GetInt64(2),
-            r.GetInt64(3), r.GetInt64(4), r.GetInt32(5));
-    }
+        using var cmd = CreateStatsForSqlCommand(_conn, sqlText);
+        if (cmd is null)
+        {
+            return null;
+        }
 
+        using var r = cmd.ExecuteReader();
+        return r.Read() ? MapCachedQueryStat(r) : null;
+    }
 
     /// <summary>
     /// Missing index dari sys.dm_db_missing_index_details, diagregasi per tabel.
@@ -130,37 +180,178 @@ ORDER BY qs.total_elapsed_time DESC;
     /// </summary>
     public IReadOnlyList<MissingIndex> GetMissingIndexes(string? dbName = null)
     {
-        var sql = @"
-SELECT
-    DB_NAME(d.database_id) AS [db],
-    OBJECT_SCHEMA_NAME(d.object_id, d.database_id) AS [schema],
-    OBJECT_NAME(d.object_id, d.database_id) AS [table],
-    MAX(d.equality_columns),
-    MAX(d.inequality_columns),
-    MAX(d.included_columns),
-    SUM(gs.user_seeks),
-    SUM(gs.user_scans),
-    MAX(CAST(gs.avg_user_impact AS bigint))
-FROM sys.dm_db_missing_index_details d
-JOIN sys.dm_db_missing_index_groups g ON g.index_handle = d.index_handle
-JOIN sys.dm_db_missing_index_group_stats gs ON gs.group_handle = g.index_group_handle
-WHERE d.database_id = DB_ID(@db)
-GROUP BY d.database_id, d.object_id
-ORDER BY SUM(gs.user_seeks) + SUM(gs.user_scans) DESC;
-";
-        var list = new List<MissingIndex>();
-        using var cmd = new SqlCommand(sql, _conn);
-        cmd.Parameters.AddWithValue("@db", (object)(dbName ?? ""));
+        using var cmd = CreateMissingIndexesCommand(_conn, dbName);
+        if (cmd is null)
+        {
+            return [];
+        }
+
         using var r = cmd.ExecuteReader();
+        var list = new List<MissingIndex>();
         while (r.Read())
-            list.Add(new MissingIndex(
-                r.GetString(0), r.GetString(1), r.GetString(2),
-                r.IsDBNull(3) ? null : r.GetString(3),
-                r.IsDBNull(4) ? null : r.GetString(4),
-                r.IsDBNull(5) ? null : r.GetString(5),
-                r.GetInt64(6), r.GetInt64(7), r.GetInt64(8)));
+        {
+            list.Add(MapMissingIndex(r));
+        }
         return list;
     }
+
+    internal static SqlCommand CreateTopQueryStatsCommand(SqlConnection? conn, int top)
+    {
+        if (top <= 0 || top > MaxTopQueryStats)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(top),
+                top,
+                $"Nilai top harus berada di antara 1 dan {MaxTopQueryStats}.");
+        }
+
+        var cmd = CreateReadOnlyCommand(TopQueryStatsSql, conn);
+        AddIntParameter(cmd, "@top", top);
+        return cmd;
+    }
+
+    internal static SqlCommand? CreateIndexUsageCommand(SqlConnection? conn, string? schema = null, string? table = null)
+    {
+        if (!TryNormalizeIdentifier(schema, out var normalizedSchema)
+            || !TryNormalizeIdentifier(table, out var normalizedTable))
+        {
+            return null;
+        }
+
+        var sql = new StringBuilder(IndexUsageBaseSql);
+        if (normalizedSchema is not null)
+        {
+            sql.Append("\n  AND OBJECT_SCHEMA_NAME(ius.object_id) = @schema");
+        }
+
+        if (normalizedTable is not null)
+        {
+            sql.Append("\n  AND OBJECT_NAME(ius.object_id) = @table");
+        }
+
+        sql.Append("\nORDER BY (ius.user_seeks + ius.user_scans + ius.user_lookups) DESC;");
+
+        var cmd = CreateReadOnlyCommand(sql.ToString(), conn);
+        AddIntParameter(cmd, "@top", MaxIndexUsageRows);
+        if (normalizedSchema is not null)
+        {
+            AddNVarCharParameter(cmd, "@schema", MaxSqlIdentifierLength, normalizedSchema);
+        }
+
+        if (normalizedTable is not null)
+        {
+            AddNVarCharParameter(cmd, "@table", MaxSqlIdentifierLength, normalizedTable);
+        }
+
+        return cmd;
+    }
+
+    internal static SqlCommand? CreateStatsForSqlCommand(SqlConnection? conn, string sqlText)
+    {
+        ArgumentNullException.ThrowIfNull(sqlText);
+
+        var pattern = ExecutionPlanQueryGuard.BuildPlanCacheLikePattern(sqlText);
+        if (string.IsNullOrEmpty(pattern))
+        {
+            return null;
+        }
+
+        var cmd = CreateReadOnlyCommand(StatsForSqlQuerySql, conn);
+        AddNVarCharParameter(cmd, "@pattern", 4000, pattern);
+        return cmd;
+    }
+
+    internal static SqlCommand? CreateMissingIndexesCommand(SqlConnection? conn, string? dbName = null)
+    {
+        if (!TryNormalizeIdentifier(dbName, out var normalizedDb))
+        {
+            return null;
+        }
+
+        var cmd = CreateReadOnlyCommand(MissingIndexesQuerySql, conn);
+        AddIntParameter(cmd, "@top", MaxMissingIndexRows);
+        AddNVarCharParameter(cmd, "@db", MaxSqlIdentifierLength, (object?)normalizedDb ?? DBNull.Value);
+        return cmd;
+    }
+
+    internal static QueryExecutionStat MapQueryExecutionStat(IDataRecord r) =>
+        new(
+            GetSafeString(r, 0),
+            GetSafeInt64(r, 1),
+            GetSafeInt64(r, 2),
+            GetSafeInt64(r, 3),
+            GetSafeInt64(r, 4));
+
+    internal static IndexUsage MapIndexUsage(IDataRecord r) =>
+        new(
+            GetSafeString(r, 0),
+            GetSafeString(r, 1),
+            GetSafeString(r, 2, HeapIndexPlaceholder),
+            GetSafeInt64(r, 3),
+            GetSafeInt64(r, 4),
+            GetSafeInt64(r, 5),
+            GetSafeInt64(r, 6));
+
+    internal static CachedQueryStat MapCachedQueryStat(IDataRecord r) =>
+        new(
+            GetSafeString(r, 0),
+            GetSafeInt64(r, 1),
+            GetSafeInt64(r, 2),
+            GetSafeInt64(r, 3),
+            GetSafeInt64(r, 4),
+            GetSafeInt32(r, 5));
+
+    internal static MissingIndex MapMissingIndex(IDataRecord r) =>
+        new(
+            GetSafeString(r, 0),
+            GetSafeString(r, 1),
+            GetSafeString(r, 2),
+            GetSafeNullableString(r, 3),
+            GetSafeNullableString(r, 4),
+            GetSafeNullableString(r, 5),
+            GetSafeInt64(r, 6),
+            GetSafeInt64(r, 7),
+            GetSafeInt64(r, 8));
+
+    private static SqlCommand CreateReadOnlyCommand(string sql, SqlConnection? conn) =>
+        new(sql, conn) { CommandTimeout = DefaultCommandTimeoutSeconds };
+
+    private static void AddIntParameter(SqlCommand cmd, string name, int value) =>
+        cmd.Parameters.Add(name, SqlDbType.Int).Value = value;
+
+    private static void AddNVarCharParameter(SqlCommand cmd, string name, int size, object value) =>
+        cmd.Parameters.Add(name, SqlDbType.NVarChar, size).Value = value;
+
+    private static bool TryNormalizeIdentifier(string? raw, out string? normalized)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            normalized = null;
+            return true;
+        }
+
+        var trimmed = raw.Trim();
+        if (trimmed.Length > MaxSqlIdentifierLength)
+        {
+            normalized = null;
+            return false;
+        }
+
+        normalized = trimmed;
+        return true;
+    }
+
+    private static string GetSafeString(IDataRecord r, int ordinal, string fallback = "") =>
+        r.IsDBNull(ordinal) ? fallback : r.GetString(ordinal);
+
+    private static string? GetSafeNullableString(IDataRecord r, int ordinal) =>
+        r.IsDBNull(ordinal) ? null : r.GetString(ordinal);
+
+    private static long GetSafeInt64(IDataRecord r, int ordinal) =>
+        r.IsDBNull(ordinal) ? 0L : r.GetInt64(ordinal);
+
+    private static int GetSafeInt32(IDataRecord r, int ordinal) =>
+        r.IsDBNull(ordinal) ? 0 : r.GetInt32(ordinal);
 
     /// <summary>
     /// Mengambil XML Execution Plan lokal tanpa mengeksekusi mutasi data:
