@@ -29,6 +29,7 @@ public sealed class SqlAnalyzer
         new DynamicSqlRule(),
         new CursorUsageRule(),
         new NotInSubqueryRule(),
+        new NullComparisonRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
