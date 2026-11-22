@@ -57,5 +57,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("DYNAMIC_SQL", ids);
         Assert.Contains("CURSOR_USAGE", ids);
         Assert.Contains("NOT_IN_SUBQUERY", ids);
+        Assert.Contains("NULL_COMPARISON", ids);
     }
 }
