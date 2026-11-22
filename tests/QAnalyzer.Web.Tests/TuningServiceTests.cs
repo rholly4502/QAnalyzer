@@ -267,4 +267,37 @@ public class TuningServiceTests
         Assert.Equal(ExecutionPlanParser.MaxDiagnostics, resp.TotalDiagnostics);
         Assert.Contains(client.LastRequest.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb);
     }
+
+    [Fact]
+    public async Task TuneAsync_OverDeepSql_ThrowsFormatExceptionWithoutCallingAdvisor()
+    {
+        var client = new CapturingAdvisorClient(new TuningResponse(true, "OK", null));
+        var service = new TuningService(client);
+        var overDeepSql = "SELECT "
+            + new string('(', SqlAnalyzer.MaxNestingDepth + 1)
+            + "1"
+            + new string(')', SqlAnalyzer.MaxNestingDepth + 1)
+            + ";";
+
+        await Assert.ThrowsAsync<FormatException>(() => service.TuneAsync(new TuneRequest { Sql = overDeepSql }));
+        Assert.Null(client.LastRequest);
+    }
+
+    [Fact]
+    public async Task TuneAsync_HighVolumeSqlDiagnostics_CapsForwardedDiagnosticsAndRetainsCritical()
+    {
+        var client = new CapturingAdvisorClient(new TuningResponse(true, "Ringkas saran.", null));
+        var service = new TuningService(client);
+        var floodedSql = string.Concat(Enumerable.Repeat("SELECT * FROM dbo.Orders;\n", SqlAnalyzer.MaxDiagnostics + 50))
+            + "DELETE FROM dbo.Orders;";
+
+        var resp = await service.TuneAsync(new TuneRequest { Sql = floodedSql });
+
+        Assert.True(resp.Success);
+        Assert.True(resp.HasCritical);
+        Assert.Equal(SqlAnalyzer.MaxDiagnostics, resp.TotalDiagnostics);
+        Assert.NotNull(client.LastRequest);
+        Assert.Equal(SqlAnalyzer.MaxDiagnostics, client.LastRequest!.Diagnostics.Count);
+        Assert.Contains(client.LastRequest.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE");
+    }
 }

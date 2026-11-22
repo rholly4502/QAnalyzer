@@ -20,8 +20,9 @@ public static class MaxDopTransformer
             return sql;
         }
 
-        var fragment = SqlAstParser.Parse(sql, out var errors);
-        if (fragment is null || errors.Count > 0)
+        if (!SqlAstParser.TryParse(sql, out var fragment, out var errors, out _)
+            || fragment is null
+            || errors.Count > 0)
         {
             return sql;
         }
