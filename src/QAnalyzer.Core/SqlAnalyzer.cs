@@ -30,6 +30,7 @@ public sealed class SqlAnalyzer
         new CursorUsageRule(),
         new NotInSubqueryRule(),
         new NullComparisonRule(),
+        new UnspecifiedTypeLengthRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)

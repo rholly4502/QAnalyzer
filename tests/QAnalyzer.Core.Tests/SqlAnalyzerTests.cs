@@ -58,5 +58,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("CURSOR_USAGE", ids);
         Assert.Contains("NOT_IN_SUBQUERY", ids);
         Assert.Contains("NULL_COMPARISON", ids);
+        Assert.Contains("UNSPECIFIED_TYPE_LENGTH", ids);
     }
 }
