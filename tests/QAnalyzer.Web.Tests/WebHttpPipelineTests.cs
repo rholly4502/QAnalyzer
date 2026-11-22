@@ -864,4 +864,24 @@ public class WebHttpPipelineTests
             Assert.Contains(stub.LastRequest.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE");
         }
     }
+
+    [Fact]
+    public async Task AnalyzeEndpoint_ReportingProfile_PreservesCriticalNoLockOnWriteStatement()
+    {
+        await using var host = await StartTestHostAsync();
+        using var body = new StringContent(
+            """{"sql":"UPDATE dbo.Orders WITH (NOLOCK) SET Status = 'X' WHERE Id = 1;","profile":"reporting"}""",
+            Encoding.UTF8,
+            "application/json");
+
+        var response = await host.Client.PostAsync("/analyzer/api/analyze", body);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = await ReadJsonAsync(response);
+        Assert.True(json.RootElement.GetProperty("hasCritical").GetBoolean());
+        var nolock = Assert.Single(
+            json.RootElement.GetProperty("diagnostics").EnumerateArray(),
+            d => d.GetProperty("ruleId").GetString() == "NOLOCK");
+        Assert.Equal("Critical", nolock.GetProperty("level").GetString());
+    }
 }

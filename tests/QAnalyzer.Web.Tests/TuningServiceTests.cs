@@ -300,4 +300,25 @@ public class TuningServiceTests
         Assert.Equal(SqlAnalyzer.MaxDiagnostics, client.LastRequest!.Diagnostics.Count);
         Assert.Contains(client.LastRequest.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE");
     }
+
+    [Fact]
+    public async Task TuneAsync_ReportingProfile_PreservesCriticalNoLockOnWriteStatements()
+    {
+        var client = new CapturingAdvisorClient(new TuningResponse(true, "Hapus NOLOCK pada UPDATE.", null));
+        var service = new TuningService(client);
+
+        var resp = await service.TuneAsync(new TuneRequest
+        {
+            Sql = "UPDATE dbo.Orders WITH (NOLOCK) SET Status = 'X' WHERE Id = 1;",
+            Profile = "reporting",
+        });
+
+        Assert.True(resp.Success);
+        Assert.True(resp.HasCritical);
+        var dto = Assert.Single(resp.Diagnostics, d => d.RuleId == "NOLOCK");
+        Assert.Equal("Critical", dto.Level);
+        Assert.NotNull(client.LastRequest);
+        var forwarded = Assert.Single(client.LastRequest!.Diagnostics, d => d.RuleId == "NOLOCK");
+        Assert.Equal(RiskLevel.Critical, forwarded.Level);
+    }
 }
