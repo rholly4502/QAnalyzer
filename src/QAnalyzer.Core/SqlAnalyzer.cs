@@ -28,6 +28,7 @@ public sealed class SqlAnalyzer
         new NonSargablePredicateRule(),
         new DynamicSqlRule(),
         new CursorUsageRule(),
+        new NotInSubqueryRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
