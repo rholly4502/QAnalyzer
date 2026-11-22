@@ -56,5 +56,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("NON_SARGABLE", ids);
         Assert.Contains("DYNAMIC_SQL", ids);
         Assert.Contains("CURSOR_USAGE", ids);
+        Assert.Contains("NOT_IN_SUBQUERY", ids);
     }
 }
