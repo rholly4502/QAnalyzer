@@ -8,8 +8,9 @@ namespace QAnalyzer.Core;
 /// <summary>
 /// Parser XML SQL Server Execution Plan (.sqlplan / SHOWPLAN_XML) yang aman (tanpa DTD/XXE).
 /// Memvalidasi elemen root &lt;ShowPlanXML&gt; dan mendeteksi anti-pattern utama:
-/// MissingIndex, Key/RID Lookup, Table Scan, SpillToTempDb, PlanAffectingConvert,
-/// NoJoinPredicate, serta ColumnsWithNoStatistics.
+/// MissingIndex, Key/RID Lookup, Table Scan, SpillToTempDb/ExchangeSpillDetails, PlanAffectingConvert,
+/// NoJoinPredicate, ColumnsWithNoStatistics, MemoryGrantWarning, UnmatchedIndexes,
+/// StatementOptmEarlyAbortReason, serta selisih estimasi cardinality (EstimateRows vs ActualRows).
 /// </summary>
 public sealed class ExecutionPlanParser
 {
@@ -20,9 +21,16 @@ public sealed class ExecutionPlanParser
     public const string RuleImplicitConvert = "PLAN_IMPLICIT_CONVERT";
     public const string RuleNoJoinPredicate = "PLAN_NO_JOIN_PREDICATE";
     public const string RuleMissingStatistics = "PLAN_NO_STATISTICS";
+    public const string RuleMemoryGrantWarning = "PLAN_MEMORY_GRANT_WARNING";
+    public const string RuleUnmatchedIndex = "PLAN_UNMATCHED_INDEX";
+    public const string RuleOptimizerEarlyAbort = "PLAN_OPTIMIZER_ABORT";
+    public const string RuleEstimateSkew = "PLAN_ESTIMATE_SKEW";
 
     public const int MaxXmlDepth = 256;
     public const int MaxDiagnostics = 100;
+
+    internal const double EstimateSkewMinRatio = 10.0;
+    internal const double EstimateSkewMinRowDelta = 1000.0;
 
     private const long MaxPlanCharacters = 10_000_000;
     private const int MaxExpressionPreviewLength = 160;
@@ -31,6 +39,7 @@ public sealed class ExecutionPlanParser
     private const int MaxIndexSuffixLength = 64;
     private const int MaxMissingIndexColumnsPerGroup = 16;
     private const int MaxListedMissingStatColumns = 5;
+    private const int MaxListedUnmatchedIndexes = 5;
 
     public IReadOnlyList<Diagnostic> Parse(string sqlPlanXml)
     {
@@ -75,6 +84,10 @@ public sealed class ExecutionPlanParser
         CollectOperatorIssues(root, diagnostics);
         CollectImplicitConversions(root, diagnostics);
         CollectColumnsWithNoStatistics(root, diagnostics);
+        CollectMemoryGrantWarnings(root, diagnostics);
+        CollectUnmatchedIndexes(root, diagnostics);
+        CollectOptimizerEarlyAborts(root, diagnostics);
+        CollectEstimateSkews(root, diagnostics);
 
         return diagnostics;
     }
@@ -267,6 +280,36 @@ public sealed class ExecutionPlanParser
                 line,
                 col));
         }
+
+        if (diagnostics.Count >= MaxDiagnostics)
+        {
+            return;
+        }
+
+        foreach (var exchangeSpill in DescendantsByLocalName(root, "ExchangeSpillDetails"))
+        {
+            if (diagnostics.Count >= MaxDiagnostics) return;
+            if (exchangeSpill.Parent is { Name.LocalName: "Warnings" } parentWarnings
+                && ElementsByLocalName(parentWarnings, "SpillToTempDb").Any())
+            {
+                continue;
+            }
+
+            var writesText = FormatNonNegativeLong((string?)exchangeSpill.Attribute("WritesToTempDb"));
+            var physicalOp = NormalizeSingleLine((string?)FindParentRelOp(exchangeSpill)?.Attribute("PhysicalOp"), MaxAttributeLength);
+            var (line, col) = GetLineInfo(exchangeSpill);
+            var opDesc = string.IsNullOrEmpty(physicalOp) ? "operator paralelisme" : $"operator {physicalOp}";
+            var writesDesc = string.IsNullOrEmpty(writesText) ? string.Empty : $" ({writesText} halaman ditulis ke tempdb)";
+
+            diagnostics.Add(new Diagnostic(
+                RiskLevel.Critical,
+                RuleSpillToTempDb,
+                "Spill to TempDb Terdeteksi",
+                $"Terjadi exchange spill ke tempdb pada {opDesc}{writesDesc} akibat ketidakseimbangan atau hambatan antar thread paralel.",
+                "Perbarui statistik tabel (UPDATE STATISTICS), periksa skew data/join, atau pertimbangkan penyesuaian MAXDOP pada query ini.",
+                line,
+                col));
+        }
     }
 
     private static void CollectImplicitConversions(XElement root, List<Diagnostic> diagnostics)
@@ -399,6 +442,184 @@ public sealed class ExecutionPlanParser
         }
     }
 
+    private static void CollectMemoryGrantWarnings(XElement root, List<Diagnostic> diagnostics)
+    {
+        if (diagnostics.Count >= MaxDiagnostics) return;
+
+        foreach (var warning in DescendantsByLocalName(root, "MemoryGrantWarning"))
+        {
+            if (diagnostics.Count >= MaxDiagnostics) return;
+
+            var kind = NormalizeSingleLine((string?)warning.Attribute("GrantWarningKind"), MaxAttributeLength);
+            var metrics = new (string Attr, string Label)[]
+                {
+                    ("RequestedMemory", "requested"),
+                    ("GrantedMemory", "granted"),
+                    ("MaxUsedMemory", "used"),
+                }
+                .Select(m => (m.Label, Value: FormatNonNegativeLong((string?)warning.Attribute(m.Attr))))
+                .Where(m => !string.IsNullOrEmpty(m.Value))
+                .Select(m => $"{m.Label}={m.Value} KB")
+                .ToList();
+
+            var metricsDesc = metrics.Count > 0 ? $" ({string.Join(", ", metrics)})" : string.Empty;
+            var (message, suggestion) = kind switch
+            {
+                _ when string.Equals(kind, "Excessive Grant", StringComparison.OrdinalIgnoreCase) => (
+                    $"Peringatan memory grant '{kind}'{metricsDesc} — alokasi memori jauh melebihi pemakaian aktual dan berisiko memboroskan workspace memory.",
+                    "Perbarui statistik tabel (UPDATE STATISTICS), perbaiki estimasi cardinality, atau tinjau tipe/ukuran kolom dan parameter sniffing."),
+                _ when string.Equals(kind, "Used More Than Granted", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(kind, "Grant Increase", StringComparison.OrdinalIgnoreCase) => (
+                    $"Peringatan memory grant '{kind}'{metricsDesc} — memori awal tidak mencukupi sehingga berisiko memicu spill ke tempdb atau grant wait.",
+                    "Perbarui statistik tabel (UPDATE STATISTICS), perbaiki estimasi cardinality, dan kurangi beban sort/hash dengan index yang sesuai."),
+                _ => (
+                    $"Peringatan memory grant{(string.IsNullOrEmpty(kind) ? string.Empty : $" '{kind}'")} terdeteksi{metricsDesc} pada eksekusi query.",
+                    "Perbarui statistik tabel (UPDATE STATISTICS) dan periksa kesesuaian estimasi cardinality dengan ukuran data aktual."),
+            };
+
+            var (line, col) = GetLineInfo(warning);
+            diagnostics.Add(new Diagnostic(RiskLevel.Warning, RuleMemoryGrantWarning, "Peringatan Memory Grant di Execution Plan", message, suggestion, line, col));
+        }
+    }
+
+    private static void CollectUnmatchedIndexes(XElement root, List<Diagnostic> diagnostics)
+    {
+        if (diagnostics.Count >= MaxDiagnostics) return;
+
+        foreach (var unmatched in DescendantsByLocalName(root, "UnmatchedIndexes"))
+        {
+            if (diagnostics.Count >= MaxDiagnostics) return;
+
+            var indexes = DescendantsByLocalName(unmatched, "Object")
+                .Select(FormatUnmatchedIndexObject)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var message = indexes.Count == 0
+                ? "Filtered index tidak dapat dicocokkan dengan query terparameterisasi (UnmatchedIndexes)."
+                : $"Filtered index berikut tidak dapat dipakai akibat parameterisasi ({string.Join(", ", indexes.Take(MaxListedUnmatchedIndexes))}{(indexes.Count > MaxListedUnmatchedIndexes ? $" (+{indexes.Count - MaxListedUnmatchedIndexes} lainnya)" : string.Empty)}).";
+
+            var (line, col) = GetLineInfo(unmatched);
+            diagnostics.Add(new Diagnostic(
+                RiskLevel.Warning,
+                RuleUnmatchedIndex,
+                "Filtered Index Tidak Terpakai (UnmatchedIndexes)",
+                message,
+                "Gunakan nilai literal pada predicate filter index, tambahkan OPTION (RECOMPILE), atau sesuaikan definisi filtered index.",
+                line,
+                col));
+        }
+    }
+
+    private static void CollectOptimizerEarlyAborts(XElement root, List<Diagnostic> diagnostics)
+    {
+        if (diagnostics.Count >= MaxDiagnostics) return;
+
+        foreach (var stmt in root.Descendants().Where(static e => e.Name.LocalName is "StmtSimple" or "StmtCond"))
+        {
+            if (diagnostics.Count >= MaxDiagnostics) return;
+
+            var reason = NormalizeSingleLine((string?)stmt.Attribute("StatementOptmEarlyAbortReason"), MaxAttributeLength);
+            var details = reason switch
+            {
+                _ when string.Equals(reason, "TimeOut", StringComparison.OrdinalIgnoreCase) => (
+                    Message: $"Optimizer berhenti lebih awal ({reason}) sehingga execution plan yang dihasilkan mungkin belum optimal.",
+                    Suggestion: "Sederhanakan query, pecah join/CTE yang kompleks, perbarui statistik (UPDATE STATISTICS), atau periksa kondisi index."),
+                _ when string.Equals(reason, "MemoryLimitExceeded", StringComparison.OrdinalIgnoreCase) => (
+                    Message: $"Optimizer berhenti lebih awal ({reason}) karena batas memori kompilasi tercapai; plan berisiko suboptimal.",
+                    Suggestion: "Sederhanakan kompleksitas query/CTE, perbarui statistik, dan periksa tekanan memori SQL Server."),
+                _ => default,
+            };
+
+            if (details.Message is null) continue;
+            var (line, col) = GetLineInfo(stmt);
+            diagnostics.Add(new Diagnostic(RiskLevel.Warning, RuleOptimizerEarlyAbort, "Optimizer Berhenti Lebih Awal", details.Message, details.Suggestion, line, col));
+        }
+    }
+
+    private static void CollectEstimateSkews(XElement root, List<Diagnostic> diagnostics)
+    {
+        if (diagnostics.Count >= MaxDiagnostics) return;
+
+        foreach (var relOp in DescendantsByLocalName(root, "RelOp"))
+        {
+            if (diagnostics.Count >= MaxDiagnostics) return;
+            if (!TryParseNonNegativeDouble((string?)relOp.Attribute("EstimateRows"), out var estimateRows)) continue;
+
+            var runTimeInfo = ElementsByLocalName(relOp, "RunTimeInformation").FirstOrDefault();
+            if (runTimeInfo is null) continue;
+
+            double actualRows = 0, totalExecutions = 0, maxThreadExecutions = 0;
+            bool hasActualRows = false, hasActualExecutions = false;
+            var activeThreads = 0;
+
+            foreach (var thread in ElementsByLocalName(runTimeInfo, "RunTimeCountersPerThread"))
+            {
+                if (TryParseNonNegativeDouble((string?)thread.Attribute("ActualRows"), out var threadRows))
+                {
+                    actualRows += threadRows;
+                    hasActualRows = true;
+                }
+
+                if (TryParseNonNegativeDouble((string?)thread.Attribute("ActualExecutions"), out var threadExecutions))
+                {
+                    totalExecutions += threadExecutions;
+                    hasActualExecutions = true;
+                    if (threadExecutions > maxThreadExecutions) maxThreadExecutions = threadExecutions;
+                    if (threadExecutions > 0) activeThreads++;
+                }
+            }
+
+            if (!hasActualRows || !double.IsFinite(actualRows) || !double.IsFinite(totalExecutions)) continue;
+
+            var isParallel = IsTruthy((string?)relOp.Attribute("Parallel")) || activeThreads > 1;
+            double effectiveExecutions;
+            if (hasActualExecutions)
+            {
+                if (totalExecutions <= 0 || (isParallel && maxThreadExecutions > 1)) continue;
+                effectiveExecutions = isParallel ? 1.0 : totalExecutions;
+            }
+            else
+            {
+                effectiveExecutions = 1.0;
+            }
+
+            var expectedTotal = estimateRows * effectiveExecutions;
+            if (!double.IsFinite(expectedTotal) || Math.Abs(actualRows - expectedTotal) < EstimateSkewMinRowDelta) continue;
+
+            var ratio = Math.Max(
+                Math.Max(actualRows, 1.0) / Math.Max(expectedTotal, 1.0),
+                Math.Max(expectedTotal, 1.0) / Math.Max(actualRows, 1.0));
+            if (!double.IsFinite(ratio) || ratio < EstimateSkewMinRatio) continue;
+
+            var physicalOp = NormalizeSingleLine((string?)relOp.Attribute("PhysicalOp"), MaxAttributeLength);
+            var nodeId = NormalizeSingleLine((string?)relOp.Attribute("NodeId"), MaxAttributeLength);
+            var opDesc = (physicalOp, nodeId) switch
+            {
+                ({ Length: > 0 }, { Length: > 0 }) => $"operator {physicalOp} (NodeId {nodeId})",
+                ({ Length: > 0 }, _) => $"operator {physicalOp}",
+                (_, { Length: > 0 }) => $"operator NodeId {nodeId}",
+                _ => "operator eksekusi",
+            };
+
+            var direction = actualRows >= expectedTotal ? "underestimate" : "overestimate";
+            var ratioText = ratio >= 1e15
+                ? ratio.ToString("0.#E+0", CultureInfo.InvariantCulture)
+                : ratio.ToString("0.#", CultureInfo.InvariantCulture);
+            var (line, col) = GetLineInfo(relOp);
+
+            diagnostics.Add(new Diagnostic(
+                RiskLevel.Warning,
+                RuleEstimateSkew,
+                "Estimasi Cardinality Meleset Jauh",
+                $"Estimasi cardinality {direction} (~{ratioText}x) pada {opDesc}: estimasi {FormatRowCount(expectedTotal)} baris vs aktual {FormatRowCount(actualRows)} baris.",
+                "Perbarui statistik tabel (UPDATE STATISTICS), periksa predicate non-SARGable atau parameter sniffing, dan pastikan index serta statistik kolom filter akurat.",
+                line,
+                col));
+        }
+    }
+
     private static IEnumerable<XElement> DescendantsByLocalName(XElement root, string localName) =>
         root.Descendants().Where(e => e.Name.LocalName == localName);
 
@@ -509,6 +730,44 @@ public sealed class ExecutionPlanParser
 
         return string.Join(".", new[] { schema, table, column }.Where(part => !string.IsNullOrEmpty(part)));
     }
+
+    private static string FormatUnmatchedIndexObject(XElement obj)
+    {
+        var schema = SanitizeIdentifier((string?)obj.Attribute("Schema"));
+        var table = SanitizeIdentifier((string?)obj.Attribute("Table"));
+        var index = SanitizeIdentifier((string?)obj.Attribute("Index"));
+
+        if (!string.IsNullOrEmpty(table))
+        {
+            var tableName = string.IsNullOrEmpty(schema) ? table : $"{schema}.{table}";
+            return string.IsNullOrEmpty(index) ? tableName : $"{tableName} ({index})";
+        }
+
+        return index;
+    }
+
+    private static string FormatNonNegativeLong(string? raw) =>
+        long.TryParse(raw?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value >= 0
+            ? value.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+
+    private static bool TryParseNonNegativeDouble(string? raw, out double value)
+    {
+        if (double.TryParse(raw?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+            && double.IsFinite(value)
+            && value >= 0)
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static string FormatRowCount(double value) =>
+        value >= 1e15
+            ? value.ToString("0.##E+0", CultureInfo.InvariantCulture)
+            : value.ToString("0.##", CultureInfo.InvariantCulture);
 
     private static string FormatExpressionPreview(string? raw) =>
         NormalizeSingleLine(raw, MaxExpressionPreviewLength);

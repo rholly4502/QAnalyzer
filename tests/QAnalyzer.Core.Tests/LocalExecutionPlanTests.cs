@@ -284,4 +284,62 @@ public sealed class LocalExecutionPlanTests
 
         await Assert.ThrowsAsync<FormatException>(() => analyzer.AnalyzeAsync("SELECT Id FROM dbo.Orders;", reader));
     }
+
+    [Fact]
+    public async Task LocalExecutionPlanAnalyzer_DetectsAdvancedPlanDiagnosticsAndAppliesOverrides()
+    {
+        var xml = $"""
+            <ShowPlanXML xmlns="{ShowPlanNs}">
+              <BatchSequence>
+                <Batch>
+                  <Statements>
+                    <StmtSimple StatementOptmEarlyAbortReason="TimeOut">
+                      <QueryPlan>
+                        <Warnings>
+                          <MemoryGrantWarning GrantWarningKind="Excessive Grant" RequestedMemory="65536" GrantedMemory="65536" MaxUsedMemory="512" />
+                          <UnmatchedIndexes>
+                            <Parameterization>
+                              <Object Schema="[dbo]" Table="[Orders]" Index="[IX_Orders_Open]" />
+                            </Parameterization>
+                          </UnmatchedIndexes>
+                        </Warnings>
+                        <RelOp NodeId="1" PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="5" Parallel="false">
+                          <RunTimeInformation>
+                            <RunTimeCountersPerThread Thread="0" ActualRows="15000" ActualExecutions="1" />
+                          </RunTimeInformation>
+                        </RelOp>
+                        <RelOp NodeId="2" PhysicalOp="Parallelism" LogicalOp="Repartition Streams">
+                          <Warnings>
+                            <ExchangeSpillDetails WritesToTempDb="12" />
+                          </Warnings>
+                        </RelOp>
+                      </QueryPlan>
+                    </StmtSimple>
+                  </Statements>
+                </Batch>
+              </BatchSequence>
+            </ShowPlanXML>
+            """;
+
+        var settings = new AnalyzerSettings
+        {
+            RuleSeverityOverrides = new Dictionary<string, RiskLevel>
+            {
+                [ExecutionPlanParser.RuleEstimateSkew] = RiskLevel.Critical,
+            },
+        };
+        var reader = new StubMetadataReader(new ExecutionPlanResult(xml, ExecutionPlanSource.PlanCache));
+        var analyzer = new LocalExecutionPlanAnalyzer([new SelectStarRule()], settings);
+
+        var result = await analyzer.AnalyzeAsync("SELECT Id FROM dbo.Orders;", reader);
+
+        Assert.Equal(ExecutionPlanSource.PlanCache, result.PlanSource);
+        Assert.Equal(5, result.PlanDiagnosticCount);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleMemoryGrantWarning && d.Level == RiskLevel.Warning);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleUnmatchedIndex && d.Level == RiskLevel.Warning);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleOptimizerEarlyAbort && d.Level == RiskLevel.Warning);
+        Assert.Contains(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb && d.Level == RiskLevel.Critical);
+        var skewDiag = Assert.Single(result.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleEstimateSkew);
+        Assert.Equal(RiskLevel.Critical, skewDiag.Level);
+    }
 }
