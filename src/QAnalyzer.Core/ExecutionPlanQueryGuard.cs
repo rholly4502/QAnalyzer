@@ -29,7 +29,8 @@ public static partial class ExecutionPlanQueryGuard
         if (string.IsNullOrWhiteSpace(sql))
             return Fail("Script SQL kosong.", out rejectionReason);
 
-        var fragment = SqlAstParser.Parse(sql, out var errors);
+        if (!SqlAstParser.TryParse(sql, out var fragment, out var errors, out var complexityError))
+            return Fail(complexityError ?? "Script T-SQL melebihi batas kompleksitas yang aman.", out rejectionReason);
         if (fragment is not TSqlScript script || errors.Count > 0)
             return Fail("Script T-SQL tidak valid atau mengandung syntax error.", out rejectionReason);
 

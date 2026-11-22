@@ -281,4 +281,29 @@ public class AnalyzerServiceTests
         Assert.True(resp.HasCritical);
         Assert.Contains(resp.Diagnostics, d => d.RuleId == ExecutionPlanParser.RuleSpillToTempDb && d.Level == "Critical");
     }
+
+    [Fact]
+    public void Analyze_OverDeepSql_ThrowsFormatException()
+    {
+        var overDeepSql = "SELECT "
+            + new string('(', SqlAnalyzer.MaxNestingDepth + 1)
+            + "1"
+            + new string(')', SqlAnalyzer.MaxNestingDepth + 1)
+            + ";";
+
+        Assert.Throws<FormatException>(() => _service.Analyze(new AnalyzeRequest { Sql = overDeepSql }));
+    }
+
+    [Fact]
+    public void Analyze_HighVolumeSqlDiagnostics_CapsAtSqlAnalyzerMaxDiagnosticsAndRetainsCritical()
+    {
+        var floodedSql = string.Concat(Enumerable.Repeat("SELECT * FROM dbo.Orders;\n", SqlAnalyzer.MaxDiagnostics + 50))
+            + "DELETE FROM dbo.Orders;";
+
+        var resp = _service.Analyze(new AnalyzeRequest { Sql = floodedSql });
+
+        Assert.Equal(SqlAnalyzer.MaxDiagnostics, resp.Total);
+        Assert.True(resp.HasCritical);
+        Assert.Contains(resp.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE" && d.Level == "Critical");
+    }
 }

@@ -791,4 +791,77 @@ public class WebHttpPipelineTests
         Assert.Equal(ExecutionPlanParser.MaxDiagnostics, floodedJson.RootElement.GetProperty("planDiagnosticCount").GetInt32());
         Assert.True(floodedJson.RootElement.GetProperty("hasCritical").GetBoolean());
     }
+
+    private sealed class CountingAdvisorClient(TuningResponse response) : ITuningAdvisorClient
+    {
+        public int CallCount { get; private set; }
+        public TuningRequest? LastRequest { get; private set; }
+
+        public Task<TuningResponse> AskAsync(TuningRequest request, CancellationToken ct = default)
+        {
+            CallCount++;
+            LastRequest = request;
+            return Task.FromResult(response);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAndTuneEndpoints_RejectOverDeepSqlWith400_AndCapFloodedSqlDiagnostics()
+    {
+        var overDeepSql = "SELECT "
+            + new string('(', SqlAnalyzer.MaxNestingDepth + 1)
+            + "1"
+            + new string(')', SqlAnalyzer.MaxNestingDepth + 1)
+            + ";";
+
+        var config = new Dictionary<string, string?>
+        {
+            ["HERMES_TUNING_ENDPOINT"] = "https://gateway.example.local/v1",
+            ["HERMES_TUNING_API_KEY"] = "test-key",
+        };
+        var stub = new CountingAdvisorClient(new TuningResponse(true, "OK", null));
+        await using var host = await StartTestHostAsync(config, advisorClient: stub);
+
+        var overDeepPayload = JsonSerializer.Serialize(new { sql = overDeepSql });
+        foreach (var path in new[] { "/api/analyze", "/analyzer/api/analyze", "/api/tune", "/analyzer/api/tune" })
+        {
+            using var badBody = new StringContent(overDeepPayload, Encoding.UTF8, "application/json");
+            var badResp = await host.Client.PostAsync(path, badBody);
+            Assert.Equal(HttpStatusCode.BadRequest, badResp.StatusCode);
+            Assert.Equal("application/json", badResp.Content.Headers.ContentType?.MediaType);
+            using var errJson = await ReadJsonAsync(badResp);
+            Assert.False(string.IsNullOrWhiteSpace(errJson.RootElement.GetProperty("error").GetString()));
+        }
+
+        Assert.Equal(0, stub.CallCount);
+
+        var floodedSql = string.Concat(Enumerable.Repeat("SELECT * FROM dbo.Orders;\n", SqlAnalyzer.MaxDiagnostics + 50))
+            + "DELETE FROM dbo.Orders;";
+        var floodedPayload = JsonSerializer.Serialize(new { sql = floodedSql });
+
+        using (var body = new StringContent(floodedPayload, Encoding.UTF8, "application/json"))
+        {
+            var resp = await host.Client.PostAsync("/analyzer/api/analyze", body);
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            using var json = await ReadJsonAsync(resp);
+            Assert.Equal(SqlAnalyzer.MaxDiagnostics, json.RootElement.GetProperty("total").GetInt32());
+            Assert.True(json.RootElement.GetProperty("hasCritical").GetBoolean());
+            Assert.Contains(
+                json.RootElement.GetProperty("diagnostics").EnumerateArray(),
+                d => d.GetProperty("ruleId").GetString() == "DELETE_NO_WHERE");
+        }
+
+        using (var tuneBody = new StringContent(floodedPayload, Encoding.UTF8, "application/json"))
+        {
+            var tuneResp = await host.Client.PostAsync("/analyzer/api/tune", tuneBody);
+            Assert.Equal(HttpStatusCode.OK, tuneResp.StatusCode);
+            using var tuneJson = await ReadJsonAsync(tuneResp);
+            Assert.Equal(SqlAnalyzer.MaxDiagnostics, tuneJson.RootElement.GetProperty("totalDiagnostics").GetInt32());
+            Assert.True(tuneJson.RootElement.GetProperty("hasCritical").GetBoolean());
+            Assert.Equal(1, stub.CallCount);
+            Assert.NotNull(stub.LastRequest);
+            Assert.Equal(SqlAnalyzer.MaxDiagnostics, stub.LastRequest!.Diagnostics.Count);
+            Assert.Contains(stub.LastRequest.Diagnostics, d => d.RuleId == "DELETE_NO_WHERE");
+        }
+    }
 }
