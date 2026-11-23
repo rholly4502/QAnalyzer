@@ -56,4 +56,25 @@ public class NonSargableIntegrationTests
         Assert.Empty(client.LastRequest.MissingIndexes);
         Assert.Null(client.LastRequest.CachedStat);
     }
+
+    [Fact]
+    public void AnalyzerService_Analyze_DetectsTrimMergeWhenAndSingleColumnJoinArithmetic()
+    {
+        var service = new AnalyzerService();
+
+        var resp = service.Analyze(new AnalyzeRequest
+        {
+            Sql = """
+                SELECT a.Id
+                FROM dbo.Orders a
+                JOIN dbo.Invoices b ON a.OrderId + 1 = b.OrderId
+                WHERE TRIM(a.CustomerCode) = 'VIP'
+                  AND a.Code LIKE '[A-Z]%';
+                """,
+        });
+
+        var nonSargable = resp.Diagnostics.Where(d => d.RuleId == "NON_SARGABLE").ToList();
+        Assert.Equal(3, nonSargable.Count);
+        Assert.All(nonSargable, d => Assert.Equal("Warning", d.Level));
+    }
 }

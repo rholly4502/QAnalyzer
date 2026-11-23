@@ -39,6 +39,8 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
 
         public override void Visit(MergeSpecification node) => InspectBooleanExpression(node.SearchCondition);
 
+        public override void Visit(MergeActionClause node) => InspectBooleanExpression(node.SearchCondition);
+
         private void InspectBooleanExpression(BooleanExpression? expression)
         {
             switch (expression)
@@ -63,6 +65,13 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
                     return;
                 case InPredicate inPred:
                     InspectOperand(inPred.Expression, allowArithmeticOnColumn: true);
+                    if (!ContainsDirectColumnReference(inPred.Expression))
+                    {
+                        foreach (var value in inPred.Values)
+                        {
+                            InspectOperand(value, allowArithmeticOnColumn: true);
+                        }
+                    }
                     return;
                 case BooleanTernaryExpression ternary:
                     InspectOperand(ternary.FirstExpression, allowArithmeticOnColumn: true);
@@ -86,15 +95,15 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
             var lhs = Unwrap(comparison.FirstExpression);
             var rhs = Unwrap(comparison.SecondExpression);
 
-            var lhsHasCol = ContainsDirectColumnReference(lhs);
-            var rhsHasCol = ContainsDirectColumnReference(rhs);
-            if (!lhsHasCol && !rhsHasCol)
+            var lhsColCount = CountDirectColumnReferences(lhs);
+            var rhsColCount = CountDirectColumnReferences(rhs);
+            if (lhsColCount == 0 && rhsColCount == 0)
             {
                 return;
             }
 
-            InspectOperand(lhs, allowArithmeticOnColumn: !rhsHasCol || rhs is not ColumnReferenceExpression);
-            InspectOperand(rhs, allowArithmeticOnColumn: !lhsHasCol || lhs is not ColumnReferenceExpression);
+            InspectOperand(lhs, allowArithmeticOnColumn: rhsColCount == 0 || rhs is not ColumnReferenceExpression || lhsColCount == 1);
+            InspectOperand(rhs, allowArithmeticOnColumn: lhsColCount == 0 || lhs is not ColumnReferenceExpression || rhsColCount == 1);
         }
 
         private void InspectLike(LikePredicate like)
@@ -105,7 +114,7 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
                 && HasLeadingWildcard(like.SecondExpression, like.EscapeExpression))
             {
                 AddDiagnostic(
-                    "Pola LIKE diawali wildcard ('%' atau '_') pada kolom — mencegah Index Seek dan memaksa Index/Table Scan.",
+                    "Pola LIKE diawali wildcard ('%', '_', atau '[...]') pada kolom — mencegah Index Seek dan memaksa Index/Table Scan.",
                     "Hindari wildcard di awal pola; gunakan pencarian prefix (LIKE 'nilai%') atau Full-Text Index.",
                     like);
             }
@@ -131,7 +140,7 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
                 return;
             }
 
-            if (unwrapped is FunctionCall or LeftFunctionCall or RightFunctionCall
+            if (unwrapped is FunctionCall or LeftFunctionCall or RightFunctionCall or OdbcFunctionCall
                 or CastCall or ConvertCall or TryCastCall or TryConvertCall
                 or ParseCall or TryParseCall or NullIfExpression or IIfCall
                 or AtTimeZoneCall or CaseExpression)
@@ -184,39 +193,84 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
 
     private static bool HasLeadingWildcard(ScalarExpression? patternExpr, ScalarExpression? escapeExpr)
     {
-        char? escapeChar = Unwrap(escapeExpr) is StringLiteral { Value.Length: 1 } escLit
-            ? escLit.Value[0]
+        char? escapeChar = TryGetLeadingStringLiteral(escapeExpr) is { Length: 1 } escText
+            ? escText[0]
             : null;
 
         var text = TryGetLeadingStringLiteral(patternExpr);
-        return text is { Length: > 0 }
-            && (text[0] == '%' || text[0] == '_')
-            && (escapeChar is null || text[0] != escapeChar.Value);
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        var first = text[0];
+        if (escapeChar is not null && first == escapeChar.Value)
+        {
+            return false;
+        }
+
+        if (first is '%' or '_')
+        {
+            return true;
+        }
+
+        // Di T-SQL LIKE, '[x]' (1 karakter) adalah literal escape (mis. '[%]' atau '[_]'),
+        // sedangkan '[a-z]', '[ab]', atau '[^0-9]' (isi >= 2 karakter) adalah wildcard kelas karakter.
+        return first == '[' && text.IndexOf(']', 1) > 2;
     }
 
     private static string? TryGetLeadingStringLiteral(ScalarExpression? expression) =>
         Unwrap(expression) switch
         {
             StringLiteral lit => lit.Value,
+            CastCall cast => TryGetLeadingStringLiteral(cast.Parameter),
+            ConvertCall convert => TryGetLeadingStringLiteral(convert.Parameter),
+            TryCastCall tryCast => TryGetLeadingStringLiteral(tryCast.Parameter),
+            TryConvertCall tryConvert => TryGetLeadingStringLiteral(tryConvert.Parameter),
             BinaryExpression { BinaryExpressionType: BinaryExpressionType.Add or BinaryExpressionType.Concat } bin
-                => TryGetLeadingStringLiteral(bin.FirstExpression),
+                => TryGetLeadingFromSequence([bin.FirstExpression, bin.SecondExpression]),
             FunctionCall fn when fn.CallTarget is null
                 && fn.FunctionName.Value.Equals("CONCAT", StringComparison.OrdinalIgnoreCase)
                 && fn.Parameters.Count > 0
-                => TryGetLeadingStringLiteral(fn.Parameters[0]),
+                => TryGetLeadingFromSequence(fn.Parameters),
             _ => null,
         };
 
-    private static bool ContainsDirectColumnReference(TSqlFragment? node)
+    private static string? TryGetLeadingFromSequence(IEnumerable<ScalarExpression?> expressions)
+    {
+        var sawEmptyLiteral = false;
+        foreach (var expr in expressions)
+        {
+            var leading = TryGetLeadingStringLiteral(expr);
+            if (leading is null)
+            {
+                return null;
+            }
+
+            if (leading.Length > 0)
+            {
+                return leading;
+            }
+
+            sawEmptyLiteral = true;
+        }
+
+        return sawEmptyLiteral ? string.Empty : null;
+    }
+
+    private static bool ContainsDirectColumnReference(TSqlFragment? node) =>
+        CountDirectColumnReferences(node) > 0;
+
+    private static int CountDirectColumnReferences(TSqlFragment? node)
     {
         if (node is null)
         {
-            return false;
+            return 0;
         }
 
         var finder = new DirectColumnFinder();
         node.Accept(finder);
-        return finder.Found;
+        return finder.Count;
     }
 
     private sealed class DirectColumnFinder : TSqlFragmentVisitor
@@ -232,7 +286,7 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
             "DATETRUNC",
         };
 
-        public bool Found { get; private set; }
+        public int Count { get; private set; }
 
         public override void ExplicitVisit(ScalarSubquery node)
         {
@@ -241,15 +295,10 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
 
         public override void ExplicitVisit(FunctionCall node)
         {
-            if (Found)
-            {
-                return;
-            }
-
             if (node.CallTarget is null && DatePartFunctions.Contains(node.FunctionName.Value))
             {
                 // Parameter pertama fungsi tanggal (DAY, MONTH, YEAR, dll.) di-parse sebagai ColumnReferenceExpression.
-                for (var i = 1; i < node.Parameters.Count && !Found; i++)
+                for (var i = 1; i < node.Parameters.Count; i++)
                 {
                     node.Parameters[i].Accept(this);
                 }
@@ -264,7 +313,7 @@ public sealed class NonSargablePredicateRule : IAstSqlRule
         {
             if (node.ColumnType != ColumnType.Wildcard)
             {
-                Found = true;
+                Count++;
             }
         }
     }
