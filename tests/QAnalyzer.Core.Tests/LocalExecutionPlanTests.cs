@@ -31,6 +31,8 @@ public sealed class LocalExecutionPlanTests
     [InlineData("WITH Recent AS (SELECT TOP 10 Id FROM dbo.Orders) SELECT Id FROM Recent UNION ALL SELECT 0;")]
     [InlineData("DECLARE @id INT = 1; SET @id = 2; SELECT Id FROM dbo.Orders WHERE CustomerId = @id;")]
     [InlineData("-- DELETE FROM dbo.Orders\nSELECT 'UPDATE dbo.Orders SET X=1; DROP TABLE dbo.Orders;' AS Msg;")]
+    [InlineData("SELECT Id FROM SalesDb.dbo.Orders WHERE Total > 0;")]
+    [InlineData("SELECT SalesDb.dbo.fn_CalcTax(100);")]
     public void CanSafelyEstimatePlan_AllowsReadOnlySelectScripts(string sql)
     {
         var allowed = ExecutionPlanQueryGuard.CanSafelyEstimatePlan(sql, out var reason);
@@ -56,8 +58,19 @@ public sealed class LocalExecutionPlanTests
     [InlineData("SELECT * INTO dbo.OrdersCopy FROM dbo.Orders;")]
     [InlineData("SELECT * FROM (DELETE FROM dbo.Orders OUTPUT DELETED.Id WHERE Id = 1) AS d;")]
     [InlineData("SET SHOWPLAN_XML OFF; SELECT 1;")]
+    [InlineData("SET ROWCOUNT 10; SELECT 1;")]
+    [InlineData("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SELECT 1;")]
     [InlineData("SELECT * FROM OPENROWSET('SQLNCLI', 'Server=x;', 'SELECT 1') AS r;")]
     [InlineData("SELECT * FROM OPENQUERY(LinkedSrv, 'SELECT 1');")]
+    [InlineData("SELECT * FROM LinkedSrv.RemoteDb.dbo.Orders;")]
+    [InlineData("SELECT * FROM [10.0.0.5].master.sys.databases;")]
+    [InlineData("SELECT * FROM LinkedSrv...Orders;")]
+    [InlineData("SELECT * FROM LinkedSrv.RemoteDb.dbo.fn_RemoteOrders(1);")]
+    [InlineData("SELECT LinkedSrv.RemoteDb.dbo.fn_GetSecret(1);")]
+    [InlineData("SELECT LinkedSrv.RemoteDb.dbo.Orders.Id FROM dbo.Orders;")]
+    [InlineData("DECLARE @c CURSOR; SELECT 1;")]
+    [InlineData("DECLARE @c CURSOR; SET @c = CURSOR FOR SELECT Id FROM dbo.Orders; SELECT 1;")]
+    [InlineData("DECLARE @u dbo.MyUdt; SET @u.Mutate(1); SELECT 1;")]
     [InlineData("SELECT 1;\nGO\nSELECT 2;")]
     public void CanSafelyEstimatePlan_RejectsMutationsDdlMultiBatchAndInvalidSql(string sql)
     {
@@ -83,6 +96,40 @@ public sealed class LocalExecutionPlanTests
     }
 
     [Fact]
+    public void BuildPlanCacheLikePattern_CommentsWithApostrophes_DoNotCorruptQueryStructure()
+    {
+        const string sql = """
+            -- Fetch customer's active orders
+            SELECT Id, /* manager's note */ Total
+            FROM dbo.Orders
+            WHERE Status = 'Active' AND CustomerId = 42; -- today's filter
+            """;
+
+        var pattern = ExecutionPlanQueryGuard.BuildPlanCacheLikePattern(sql);
+
+        Assert.Equal("%SELECT Id,%Total FROM dbo.Orders WHERE Status = % AND CustomerId = %", pattern);
+        Assert.DoesNotContain("customer's", pattern, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("manager's", pattern, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("today's", pattern, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Active", pattern, StringComparison.Ordinal);
+        Assert.DoesNotContain("42", pattern, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildPlanCacheLikePattern_HexSignedNumericScientificMoneyLiterals_AreNormalizedWhilstPreservingBinaryMinus()
+    {
+        const string sql = "SELECT Id FROM dbo.Tx WHERE Payload = 0xCAFEBABE AND Balance < -100.50 AND Rate > 1.5E-3 AND Fee = $9.99 AND (Stock - 1) > 0;";
+
+        var pattern = ExecutionPlanQueryGuard.BuildPlanCacheLikePattern(sql);
+
+        Assert.Equal("%SELECT Id FROM dbo.Tx WHERE Payload = % AND Balance < % AND Rate > % AND Fee = % AND (Stock - %) > %", pattern);
+        Assert.DoesNotContain("0xCAFEBABE", pattern, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("100.50", pattern, StringComparison.Ordinal);
+        Assert.DoesNotContain("1.5E-3", pattern, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("$9.99", pattern, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildPlanCacheLikePattern_TruncatesLongSqlWithoutBreakingEscapeSequence()
     {
         var longCols = string.Join(", ", Enumerable.Range(1, 50).Select(i => $"Col_{i}"));
@@ -100,8 +147,13 @@ public sealed class LocalExecutionPlanTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("12345")]
+    [InlineData("-123.45")]
+    [InlineData("0x1234ABCD")]
     [InlineData("'only literal'")]
-    public void BuildPlanCacheLikePattern_ReturnsEmptyForWhitespaceOrLiteralOnly(string sql)
+    [InlineData("-- SELECT * FROM dbo.Orders WHERE Id = 1")]
+    [InlineData("/* SELECT * FROM dbo.Orders */")]
+    [InlineData(";;;")]
+    public void BuildPlanCacheLikePattern_ReturnsEmptyForWhitespaceCommentOrLiteralOnly(string sql)
     {
         var pattern = ExecutionPlanQueryGuard.BuildPlanCacheLikePattern(sql);
 
