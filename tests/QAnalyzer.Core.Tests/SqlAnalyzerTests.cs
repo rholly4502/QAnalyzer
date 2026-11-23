@@ -59,5 +59,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("NOT_IN_SUBQUERY", ids);
         Assert.Contains("NULL_COMPARISON", ids);
         Assert.Contains("UNSPECIFIED_TYPE_LENGTH", ids);
+        Assert.Contains("TOP_WITHOUT_ORDER_BY", ids);
     }
 }
