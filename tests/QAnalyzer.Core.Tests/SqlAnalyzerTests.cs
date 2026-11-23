@@ -60,5 +60,6 @@ public sealed class SqlAnalyzerTests
         Assert.Contains("NULL_COMPARISON", ids);
         Assert.Contains("UNSPECIFIED_TYPE_LENGTH", ids);
         Assert.Contains("TOP_WITHOUT_ORDER_BY", ids);
+        Assert.Contains("INSERT_WITHOUT_COLUMNS", ids);
     }
 }

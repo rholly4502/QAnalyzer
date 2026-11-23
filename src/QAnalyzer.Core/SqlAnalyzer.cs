@@ -32,6 +32,7 @@ public sealed class SqlAnalyzer
         new NullComparisonRule(),
         new UnspecifiedTypeLengthRule(),
         new TopWithoutOrderByRule(),
+        new InsertWithoutColumnListRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
