@@ -24,6 +24,12 @@ public sealed class NonSargablePredicateRuleTests
     [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '%' + @q + '%';")]
     [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE CONCAT('%', @q);")]
     [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE ('%' + @q);")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '' + '%abc';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE CONCAT('', '%', @q);")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE CAST('%abc' AS NVARCHAR(50));")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '[A-Z]ohn%';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '[ab]c%';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Code LIKE '[^0-9]%';")]
     public void Evaluate_LeadingWildcardLike_FlagsWarning(string sql)
     {
         var diags = _rule.Evaluate(sql).ToList();
@@ -41,6 +47,9 @@ public sealed class NonSargablePredicateRuleTests
     [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE @pattern;")]
     [InlineData("SELECT Id FROM dbo.Users WHERE 'hello' LIKE '%ell%';")]
     [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '%foo' ESCAPE '%';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '\\[abc%' ESCAPE '\\';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '[%]promo%';")]
+    [InlineData("SELECT Id FROM dbo.Users WHERE Name LIKE '[_]temp%';")]
     public void Evaluate_SargableOrEscapedLike_ReturnsEmpty(string sql)
     {
         Assert.Empty(_rule.Evaluate(sql));
@@ -102,6 +111,8 @@ public sealed class NonSargablePredicateRuleTests
     [InlineData("SELECT Id FROM dbo.Orders WHERE TRY_CAST(Code AS INT) = 1;")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE LEFT(Code, 3) = 'ABC';")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE RIGHT(Code, 3) = 'XYZ';")]
+    [InlineData("SELECT Id FROM dbo.Orders WHERE TRIM(Code) = 'ABC';")]
+    [InlineData("SELECT Id FROM dbo.Orders WHERE TRIM(' ' FROM Code) = 'ABC';")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE DATEDIFF(DAY, OrderDate, GETDATE()) > 7;")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE CreatedAt AT TIME ZONE 'UTC' = @dt;")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE CASE WHEN Status = 'A' THEN 1 ELSE 0 END = 1;")]
@@ -109,12 +120,23 @@ public sealed class NonSargablePredicateRuleTests
     [InlineData("SELECT Id FROM dbo.Orders WHERE YEAR(OrderDate) BETWEEN 2023 AND 2025;")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE NULLIF(Code, '') IS NULL;")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE LOWER(Name) LIKE 'abc%';")]
+    [InlineData("SELECT Id FROM dbo.Orders WHERE { fn UCASE(Code) } = 'ABC';")]
+    [InlineData("MERGE dbo.T t USING dbo.S s ON t.Id = s.Id WHEN MATCHED AND YEAR(t.UpdatedAt) = 2025 THEN DELETE;")]
     public void Evaluate_FunctionsConversionsAndPredicatesOnColumn_FlagsWarning(string sql)
     {
         var diag = Assert.Single(_rule.Evaluate(sql));
 
         Assert.Equal("NON_SARGABLE", diag.RuleId);
         Assert.Equal(RiskLevel.Warning, diag.Level);
+    }
+
+    [Fact]
+    public void Evaluate_InPredicateWithFunctionsOnValuesWhenLeftIsParameter_FlagsValues()
+    {
+        var diags = _rule.Evaluate("SELECT Id FROM dbo.Users WHERE @code IN (LOWER(PrimaryCode), TRIM(SecondaryCode));").ToList();
+
+        Assert.Equal(2, diags.Count);
+        Assert.All(diags, d => Assert.Equal("NON_SARGABLE", d.RuleId));
     }
 
     [Fact]
@@ -131,6 +153,8 @@ public sealed class NonSargablePredicateRuleTests
     [InlineData("SELECT Id FROM dbo.Orders WHERE Quantity + 1 = @target;")]
     [InlineData("SELECT Id FROM dbo.Users WHERE FirstName + ' ' + LastName = 'John Doe';")]
     [InlineData("SELECT Id FROM dbo.Orders WHERE -Amount > 100;")]
+    [InlineData("SELECT a.Id FROM dbo.Orders a JOIN dbo.Invoices b ON a.OrderId + 1 = b.OrderId;")]
+    [InlineData("SELECT Id FROM dbo.Orders WHERE Price * 1.1 > MinPrice;")]
     public void Evaluate_ArithmeticOrUnaryOnColumn_FlagsWarning(string sql)
     {
         var diag = Assert.Single(_rule.Evaluate(sql));
