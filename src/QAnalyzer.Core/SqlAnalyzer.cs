@@ -31,6 +31,7 @@ public sealed class SqlAnalyzer
         new NotInSubqueryRule(),
         new NullComparisonRule(),
         new UnspecifiedTypeLengthRule(),
+        new TopWithoutOrderByRule(),
     ];
 
     public SqlAnalyzer(IEnumerable<ISqlRule> rules, AnalyzerSettings? settings = null)
