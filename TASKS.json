@@ -132,5 +132,101 @@
   "status": "done",
   "phase": "P4",
   "note": "Verifikasi lokal: static /analyzer/ 200 (index+assets), /api/analyze 200, SQL kosong 400, test 41 hijau; contoh curl di DEPLOY.md"
+ },
+ {
+  "id": "P5.1",
+  "title": "Rule DeleteWithoutWhereRule + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.2",
+  "title": "Rule TruncateTableRule + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.3",
+  "title": "Rule SqlSyntaxErrorRule + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.4",
+  "title": "Rule DynamicSqlRule + centralize default rule set + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.5",
+  "title": "Rule CursorUsageRule (konteks-aware T-SQL cursor) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.6",
+  "title": "Rule NotInSubqueryRule (NOT IN NULL-trap) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.7",
+  "title": "Rule NullComparisonRule (konteks-aware NULL comparison) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.8",
+  "title": "Rule UnspecifiedTypeLengthRule (silent truncation) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.9",
+  "title": "Rule TopWithoutOrderByRule (non-deterministic TOP) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.10",
+  "title": "Rule NonSargablePredicateRule (MERGE/IN/LIKE/join arithmetic) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.11",
+  "title": "Rule InsertWithoutColumnListRule (implicit column order) + test",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.12",
+  "title": "Hardening SqlAstParser + SqlAnalyzer terhadap nesting DoS & diagnostic amplification",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.13",
+  "title": "ExecutionPlanParser advanced diagnostics (missing index/key lookup/table scan/spill) + XML depth hardening",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.14",
+  "title": "Migrasi ExecutionPlanQueryGuard ke ScriptDom AST + harden plan safety",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.15",
+  "title": "SqlDmvReader: perbaikan query DMV + null-handling + LIKE hardening",
+  "status": "done",
+  "phase": "P5"
+ },
+ {
+  "id": "P5.16",
+  "title": "Pertahankan Critical NOLOCK di Reporting profile + harden AppSettingsScanner",
+  "status": "done",
+  "phase": "P5"
  }
 ]
